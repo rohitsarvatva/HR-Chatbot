@@ -1,0 +1,27 @@
+{
+  "name": "hr-policy-rag-chatbot",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "build:index": "node scripts/build-index.js"
+  },
+  "dependencies": {
+    "@google/genai": "^3.4.0",
+    "@supabase/supabase-js": "^2.119.2",
+    "next": "^16.4.6",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.5",
+    "@types/react": "19.3.0",
+    "postcss": "^8.5.33",
+    "tailwindcss": "^4.3.5",
+    "typescript": "7.0.2"
+  }
+}
