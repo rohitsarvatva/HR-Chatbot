@@ -12,6 +12,8 @@
   "dependencies": {
     "@google/genai": "^3.4.0",
     "@supabase/supabase-js": "^2.119.2",
+    "compromise": "^14.21.0",
+    "natural": "^8.2.6",
     "next": "^16.4.6",
     "pdf-parse": "^2.4.5",
     "react": "^19.3.1",

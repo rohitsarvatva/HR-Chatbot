@@ -44,11 +44,30 @@ This file tracks completed work, current work, and future plans for the HR Polic
 - Missing policy information produces an explicit fallback rather than an inferred answer.
 - Query embeddings are cached by normalized question text during each server process lifetime.
 
-## Present — Phase 2 (V2: Embeddable Website Popover UI & Conversational UX)
+## Present — Phase 3 / Part 3 (Post-Checkpoint 2)
 
-> **Milestone Note**: Everything completed prior to 2026-11-25 represents **Phase 1 / V1 (Checkpoint)** (`git tag: v1.0-checkpoint`). Phase 2 introduces the embeddable website popover widget UI and natural customer-facing conversational flow.
+> **Milestone Note**:
+> - **Checkpoint 1 (Phase 1 / V1)** (`git tag: v1.0-checkpoint`): Everything completed prior to 2026-11-25 (core Hybrid RAG engine, memory, and full-screen inspection dashboard).
+> - **Checkpoint 2 (Phase 2 / V2)** (`git tag: v2.0-checkpoint`): Everything completed from 2026-11-25 through 2026-11-27 (`d0c3e34`) covering the embeddable website popover UI, fresh-chat-on-open behavior, expanded greeting/chitchat routing, Adaptive Scope & Zero-Filler prompting, and tightened RAG retrieval (`topK = 3`, `minScore = 0.55`).
+> - **Part 3 (Phase 3 / V3)**: Everything implemented after Checkpoint 2 belongs to Part 3.
 
-### 2026-11-26 (Phase 2)
+### 2026-11-27 (Part 3 — Starting Point)
+
+#### Completed
+- Finalized and locked all Phase 2 changes as **Checkpoint 2** (`git tag: v2.0-checkpoint` on commit `d0c3e34`).
+- Updated `README.md`, `Brag.md`, and `AGENTS.md` to mark Checkpoint 2 as complete and designate all subsequent work as **Part 3 / Phase 3**.
+- Added server-side NLP matching helper `lib/nlp-matcher.js` using `natural` (`PorterStemmer`, `WordTokenizer`, and `JaroWinklerDistance`) with stopword filtering and `extractStems(text)`.
+- Upgraded `lib/rag-engine.js` to precompute and cache `chunkStems` in memory on first vector-store load (`loadVectorStore` / `saveVectorStore`) and compute `keywordBonus` in `searchPolicyChunks` via exact stem matches or Jaro-Winkler fuzzy similarity (`>= 0.90` for stems of length `>= 4`), preserving the `<= 0.15` bonus cap, hybrid score formula, embedding model, and existing retrieval thresholds.
+- Added `"natural"` to `serverExternalPackages` in `next.config.mjs` to keep `natural` strictly server-side with no Next.js bundling conflicts.
+
+#### In Progress
+- Continuing Part 3 retrieval and NLP enhancements.
+
+---
+
+## Phase 2 / V2 Checkpoint Archive (Checkpoint 2 — 2026-11-25 to 2026-11-27)
+
+### 2026-11-26 (Checkpoint 2 / Phase 2)
 
 #### Completed
 - Updated `app/page.js` so clicking the floating chatbot launcher (or opening/reloading the page) always starts a fresh new chat on the `Chat` tab instead of continuing the previous thread.
@@ -58,7 +77,7 @@ This file tracks completed work, current work, and future plans for the HR Polic
 - Tightened RAG retrieval in `lib/rag-engine.js` and `app/api/chat/route.js` to `topK = 3` and `minScore = 0.55`, and added mild chunk-length normalization (`sqrt(400 / len)` floored at `0.6` for chunks > 400 chars) to `computeKeywordOverlapBonus`.
 - Updated the popover header in `app/page.js` to display `Personal Assistant` (replacing `Customer Service`) and removed the three-dots (`⋮`) options menu button from the header.
 
-### 2026-11-25 (Phase 2)
+### 2026-11-25 (Checkpoint 2 / Phase 2)
 
 #### Completed
 - Marked the pre-popover full-screen RAG dashboard & memory implementation as **V1 (Checkpoint)** (`v1.0-checkpoint`) and started **Phase 2** for the website-integrated popover experience.

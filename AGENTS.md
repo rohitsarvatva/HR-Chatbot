@@ -22,3 +22,9 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - Use `<USER_MEMORY>` and `<CHAT_HISTORY>` only for continuity and tailoring.
 - Run `npm run build` after code changes.
 - Update `README.md` and `Brag.md` for completed implementation changes.
+
+## Project Checkpoints & Phases
+
+- **Checkpoint 1 (`v1.0-checkpoint`, pre-2026-11-25)**: Core Hybrid RAG Engine, section-aware PDF indexing, NDJSON streaming, short-term context rewriting, selective long-term user memory, and full-screen RAG Inspector dashboard.
+- **Checkpoint 2 (`v2.0-checkpoint`, 2026-11-25 to 2026-11-27 / commit `d0c3e34`)**: Embeddable floating popover UI (`Rohit AI • Personal Assistant`, 2-tab `Chat`/`History`, no `Voice` or options menu), fresh chat on launcher open/reload with preserved non-empty history and user memory, hidden chunk metadata, expanded deterministic greeting/small-talk and natural fallbacks, tightened retrieval (`topK = 3`, `minScore = 0.55`, chunk-length normalization), and Adaptive Scope & Zero-Filler prompting (`temperature: 0.1`).
+- **Part 3 / Phase 3 (Current)**: Everything after Checkpoint 2 (`v2.0-checkpoint`) is Part 3. Log all new work under Phase 3 / Part 3 in `README.md` and `Brag.md`.

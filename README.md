@@ -39,26 +39,32 @@ The chatbot is intended to make HR information easier to find for topics such as
 
 ### Application
 
-- Next.js 16.4.6
-- React 19.3.1
-- React DOM 19.3.1
-- JavaScript and JSX
+- Next.js 16.4.6 (App Router; `serverExternalPackages` configured for `pdf-parse` and `natural`)
+- React 19.3.1 & React DOM 19.3.1
+- JavaScript, JSX, and TypeScript (server routes)
 - CSS with Tailwind CSS 4.3.5
+- Optional Supabase persistence via `@supabase/supabase-js` (`^2.119.2`) alongside browser `localStorage` history and memory
 
 ### AI and Retrieval
 
-- Google Gemini API through `@google/genai`
-- `gemini-embedding-001` for 768-dimension document and query embeddings
-- `GEMINI_CHAT_MODEL` for streamed answer generation
-- `GEMINI_ROUTING_MODEL` for intent routing, query rewriting, and memory extraction
+- Google Gemini API through `@google/genai` (`^3.4.0`)
+- `gemini-embedding-001` for 768-dimension document and query embeddings (with in-memory query embedding cache)
+- `GEMINI_CHAT_MODEL` for streamed answer generation (`temperature: 0.1`, Adaptive Scope & Zero-Filler prompting)
+- `GEMINI_ROUTING_MODEL` for intent routing, query rewriting, and durable memory extraction
 - Optional Gemini chat model override for streamed responses
-- Local cosine-similarity search
-- Lightweight keyword-overlap ranking
-- JSON-based vector store stored in `data/vector-store.json`
+- Local cosine-similarity hybrid search (`topK = 3`, `minScore = 0.55`)
+- JSON-based vector store stored in `data/vector-store.json` (loaded and cached in memory on startup)
+
+### NLP & Fuzzy Keyword Matching (Part 3)
+
+- `natural` (`^8.2.6`, isolated server-side in `lib/nlp-matcher.js`)
+- `natural.WordTokenizer` for alphanumeric tokenization (minimum length 2) with stopword filtering
+- `natural.PorterStemmer` for root-stem extraction (`extractStems`) and in-memory precomputed `chunkStems` caching on vector-store load
+- `natural.JaroWinklerDistance` (`>= 0.90` similarity threshold for stems of length `>= 4`) for typo-tolerant hybrid keyword bonus scoring (up to `+0.15`)
 
 ### Document Processing
 
-- `pdf-parse` for PDF text extraction
+- `pdf-parse` (`^2.4.5`) for PDF text extraction
 - Custom section-aware and sentence-preserving chunking
 - Custom PDF glyph normalization
 
@@ -77,6 +83,7 @@ HR Chatbot/
 │   ├── archemist-studio-os-policy.pdf
 │   └── vector-store.json       # Pre-built chunks and embeddings
 ├── lib/
+│   ├── nlp-matcher.js          # Server-side Porter Stemmer & Jaro-Winkler fuzzy keyword matching
 │   └── rag-engine.js           # Chunking, embeddings, vector loading, and hybrid search
 ├── private-docs/
 │   └── archemist-studio-os-policy.pdf
@@ -100,7 +107,7 @@ HR Chatbot/
 7. The server loads and caches the vector store in memory.
 8. A user's question is expanded if it contains fewer than four words.
 9. The question is embedded and compared with stored chunks using cosine similarity.
-10. A length-normalized keyword-overlap bonus of up to 15% is added to the semantic score (mildly dampened for chunks exceeding 400 characters).
+10. A Porter-stemmed and Jaro-Winkler fuzzy (`>= 0.90` for stems `>= 4` chars) keyword bonus of up to 15% is added to the semantic score using in-memory precomputed `chunkStems`.
 11. The system returns up to three chunks scoring at least 55%.
 12. If no chunk qualifies, the application states that the policy does not specify the answer.
 13. If chunks qualify, they are sent to the client and included in the Gemini prompt.
@@ -233,8 +240,9 @@ Returns NDJSON events:
 
 ## Project Phases & Checkpoints
 
-- **Phase 1 / V1 (Checkpoint — `v1.0-checkpoint`)**: Core Hybrid RAG Engine (`lib/rag-engine.js`), section-aware PDF indexing (`scripts/build-index.js`), NDJSON streaming (`/api/chat`), short-term context rewriting, selective long-term user memory (`archemist_hr_user_memory`), and full-screen inspection dashboard.
-- **Phase 2 / V2 (Current)**: Website-integrated floating chatbot popover UI (`Rohit AI • Personal Assistant`) anchored to the bottom-right corner with circular avatar launcher, streamlined header (close button only), 2-tab navigation (`Chat` & `History`, no `Voice`), per-chat deletion controls, hidden internal chunk metadata, and natural small-talk & fallback responses.
+- **Phase 1 / V1 (Checkpoint 1 — `v1.0-checkpoint`)**: Core Hybrid RAG Engine (`lib/rag-engine.js`), section-aware PDF indexing (`scripts/build-index.js`), NDJSON streaming (`/api/chat`), short-term context rewriting, selective long-term user memory (`archemist_hr_user_memory`), and full-screen inspection dashboard.
+- **Phase 2 / V2 (Checkpoint 2 — `v2.0-checkpoint`)**: Website-integrated floating chatbot popover UI (`Rohit AI • Personal Assistant`) anchored to the bottom-right corner with circular avatar launcher, streamlined header (close button only), 2-tab navigation (`Chat` & `History`, no `Voice`), per-chat deletion controls, fresh chat on launcher open/page reload while preserving non-empty history and user memory, hidden internal chunk metadata, expanded deterministic greeting/small-talk & natural fallback responses, tightened RAG retrieval (`topK = 3`, `minScore = 0.55`, chunk-length normalization), and Adaptive Scope & Zero-Filler prompting (`temperature: 0.1`).
+- **Phase 3 / Part 3 (Current)**: Upgraded hybrid keyword matching in `lib/nlp-matcher.js` and `lib/rag-engine.js` with `natural` (`PorterStemmer`, `WordTokenizer`, `JaroWinklerDistance >= 0.90` for stems `>= 4` chars) and in-memory precomputed `chunkStems` on vector-store load.
 
 ## Deployment Notes
 
