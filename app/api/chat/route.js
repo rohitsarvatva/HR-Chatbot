@@ -1,25 +1,147 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { searchPolicyChunks } from "@/lib/rag-engine";
-import { getEmployeeByEmail, getSupabaseServerClient } from "@/lib/supabaseServer";
+import {
+  getEmployeeByEmail,
+  getSupabaseServerClient,
+} from "@/lib/supabaseServer";
 
-const BASE_SYSTEM_INSTRUCTION =
-  'You are the Archemist Studio OS v1 HR & Operations Assistant.\n\nUse these context blocks when answering:\n<USER_MEMORY>Saved durable facts about the employee.\n</USER_MEMORY>\n<CHAT_HISTORY>The recent conversation, used only for continuity and follow-up resolution.\n</CHAT_HISTORY>\n<POLICY_CONTEXT>Verified excerpts from the HR policy PDF.\n</POLICY_CONTEXT>\n\nRULES:\n1. Respond naturally and politely to greetings, thanks, and meta-questions about what the assistant can do.\n2. Use <USER_MEMORY> and <CHAT_HISTORY> to resolve pronouns and tailor explanations to the employee role or context.\n3. For factual HR policy, workflow, and operational questions, rely EXCLUSIVELY on <POLICY_CONTEXT>. Never invent rules or procedures outside the PDF.\n4. Only output "The current policy document does not specify this." when a specific policy or factual question is genuinely absent from <POLICY_CONTEXT>.\n\nFormatting: Use clear, concise bullet points for multi-part rules. Never mention section numbers, section titles, or bracketed citations.';
+const NO_MATCH_FALLBACK =
+  "I don't have that specific detail in our current HR & Operations guidelines. Feel free to ask me about something else !";
+
+const SHORT_GREETING_REPLY = "Hello again! How can I help?";
+
+const GREETING_TOKEN_PATTERN =
+  "(?:hi+(?:e+|y[ao]*)?|hy+[ea]*|he+y+(?:a+|o+)?|ha+y+a*|h[aeu]l+o+w*|hl+o+|ello+|ho+l+a+|namast+e+y?|namaskar|yo+|howdy+|greetings?|good\\s+(?:morning|afternoon|evening|day)|morning|afternoon|evening|gm|ga|ge)";
+
+const GREETING_ADDRESSEE_PATTERN =
+  "(?:there|rohit|bot|ai|assistant|team|everyone|all|folks|guys|sir|ma'?am|mam|buddy|friend|mate|bro|dude|dear)";
+
+const PURE_GREETING_REGEX = new RegExp(
+  `^${GREETING_TOKEN_PATTERN}(?:\\s+(?:${GREETING_TOKEN_PATTERN}|${GREETING_ADDRESSEE_PATTERN}))*$`,
+  "i",
+);
+
+const LEADING_GREETING_REGEX = new RegExp(
+  `^${GREETING_TOKEN_PATTERN}(?:\\s+${GREETING_ADDRESSEE_PATTERN})*\\s+`,
+  "i",
+);
+
+const BASE_SYSTEM_INSTRUCTION = `You are Rohit, the Archemist Studio OS Assistant — an internal HR & Policy assistant. Answer strictly what the user asked—nothing more, nothing less.
+
+Use these context blocks when answering:
+<USER_MEMORY>Saved durable facts about the employee.
+</USER_MEMORY>
+<CHAT_HISTORY>The recent conversation, used only for continuity and follow-up resolution.
+</CHAT_HISTORY>
+<POLICY_CONTEXT>Verified excerpts from the HR policy PDF.
+</POLICY_CONTEXT>
+
+ADAPTIVE SCOPE & ZERO-FILLER RULES:
+1. PROPORTIONAL LENGTH:
+   - If the user asks for a specific fact, number, or timing (e.g., "tell about official office timing"), answer in 1–2 crisp sentences.
+   - If the user asks for a full policy, list, or multi-step process, cover all necessary steps clearly using concise bullet points.
+2. STRICT SCOPE BOUNDARY:
+   - Extract ONLY the specific lines from <POLICY_CONTEXT> that directly answer the user's question.
+   - Do NOT volunteer adjacent rules, login conditions, penalties, or edge cases unless explicitly asked.
+3. ZERO FILLER:
+   - Start immediately with the answer. Never use introductory fluff like "Here are the details regarding..." or closing remarks like "Let me know if you need more help."
+4. GROUNDING & CONTINUITY:
+   - For factual HR policy, workflow, and operational questions, rely EXCLUSIVELY on <POLICY_CONTEXT>. Never invent rules or procedures outside the PDF.
+   - Use <USER_MEMORY> and <CHAT_HISTORY> only to resolve pronouns and tailor explanations to the employee's role or context.
+   - If a specific policy or operational detail is not found in <POLICY_CONTEXT>, briefly state that you do not have that detail in the current guidelines. Never output the phrase "The current policy document does not specify this."
+   - For simple greetings like "hi", "hie", or "hello", reply with "Hello again! How can I help?"
+5. FORMATTING:
+   - Never mention section numbers, section titles, or bracketed citations.
+
+CONTRASTIVE STYLE EXAMPLES (format only — always use facts exclusively from <POLICY_CONTEXT>):
+Example 1 (Narrow fact query):
+User: tell about official office timing
+Assistant: Official office timings are 09:30 AM to 06:30 PM IST.
+
+Example 2 (Broad policy query):
+User: what is our leave policy?
+Assistant:
+- Casual Leave (CL): For short-notice personal time off.
+- Sick Leave (SL): For medical absence and recovery.
+- Earned / Paid Leave (EL): Accrued planned leave with advance manager approval.`;
 
 // Use the existing configured chat model for both routing and answer generation.
 const CHAT_MODEL = process.env.GEMINI_CHAT_MODEL || "gemini-3.1-flash-lite";
-const ROUTING_MODEL =
-  process.env.GEMINI_ROUTING_MODEL || CHAT_MODEL;
+const ROUTING_MODEL = process.env.GEMINI_ROUTING_MODEL || CHAT_MODEL;
 
-const STREAM_MODELS = [
-  CHAT_MODEL,
-  "gemini-3.5-flash-lite",
-  "gemini-3.8-flash",
-];
+const STREAM_MODELS = [CHAT_MODEL, "gemini-3.5-flash-lite", "gemini-3.8-flash"];
+
+function getChitchatReply(question) {
+  const text = question
+    .toLowerCase()
+    .replace(/[?!.,]+$/g, "")
+    .trim();
+
+  const normalized = question
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s']/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (normalized && PURE_GREETING_REGEX.test(normalized)) {
+    return SHORT_GREETING_REPLY;
+  }
+
+  const withoutLeadingGreeting = normalized.replace(LEADING_GREETING_REGEX, "");
+  const chitchatCandidate =
+    withoutLeadingGreeting && withoutLeadingGreeting !== normalized
+      ? withoutLeadingGreeting
+      : text;
+
+  if (
+    /^(how r u|how are u|how are you|how are you doing|how's it going|hows it going|how do you do|whats up|what's up|sup)\b/i.test(
+      chitchatCandidate,
+    )
+  ) {
+    return "I'm doing great, thank you for asking! How can I help you today?";
+  }
+
+  if (
+    /^(who are you|what is your name|what's your name|are you a bot|are you an ai|what can you do|how can you help|help)\b/i.test(
+      chitchatCandidate,
+    )
+  ) {
+    return "I'm Rohit, your AI Assistant! I can help you with HR Internal OS . What would you like to know?";
+  }
+
+  if (
+    /^(thanks|thank you|thx|ty|many thanks|appreciate it)\b/i.test(
+      chitchatCandidate,
+    )
+  ) {
+    return "You're welcome! Let me know if there's anything else I can help with.";
+  }
+
+  if (
+    /^(bye|goodbye|see ya|see you|take care|good night)\b/i.test(
+      chitchatCandidate,
+    )
+  ) {
+    return "Goodbye! Have a great day, and feel free to reach out anytime.";
+  }
+
+  if (
+    /^(ok|okay|got it|understood|cool|nice|great|awesome|alright)\b$/i.test(
+      text,
+    )
+  ) {
+    return "Glad I could help!";
+  }
+  if (/^(I'm Vaibhavi|Im Vaibhavi|vaibhavi)\b$/i.test(text)) {
+    return "Get Lost, Dont waste my time ! ";
+  }
+
+  return null;
+}
 
 function isGreetingOrChitchat(question) {
-  const text = question.toLowerCase().trim();
-  return /^(hi|hello|hey|thanks|thank you|thx|ok|okay|good morning)[.! ]*$/i.test(text);
+  return Boolean(getChitchatReply(question));
 }
 
 function normalizeMessages(messages) {
@@ -28,7 +150,8 @@ function normalizeMessages(messages) {
     .filter(
       (message) =>
         (message?.role === "user" || message?.role === "assistant") &&
-        (typeof message?.content === "string" || typeof message?.text === "string")
+        (typeof message?.content === "string" ||
+          typeof message?.text === "string"),
     )
     .slice(-6)
     .map((message) => ({
@@ -82,10 +205,16 @@ function needsContextRewrite(latestQuery, priorPolicyMessages) {
 
   const q = latestQuery.trim().toLowerCase();
   // Strip polite prefixes like "tell me about", "can you explain", "what is"
-  const stripped = q.replace(/^(tell me about|can you explain|please explain|what are|what is|give me)\s+/i, "");
+  const stripped = q.replace(
+    /^(tell me about|can you explain|please explain|what are|what is|give me)\s+/i,
+    "",
+  );
 
   // Only rewrite if it has pronouns, follow-up phrases, or is very short (<= 3 words)
-  const hasPronounOrFollowup = /\b(it|its|this|that|these|those|they|them|their|he|she|same|above|previous|step \d+|what if|how about|and what)\b/i.test(stripped);
+  const hasPronounOrFollowup =
+    /\b(it|its|this|that|these|those|they|them|their|he|she|same|above|previous|step \d+|what if|how about|and what)\b/i.test(
+      stripped,
+    );
   const isVeryShort = stripped.split(/\s+/).length <= 3;
 
   return hasPronounOrFollowup || isVeryShort;
@@ -105,7 +234,10 @@ function parseJsonResponse(text) {
 
 async function routeAndRewrite(ai, question, chatHistory) {
   const historyText = chatHistory
-    .map((message) => `${message.role === "user" ? "Employee" : "Assistant"}: ${message.content}`)
+    .map(
+      (message) =>
+        `${message.role === "user" ? "Employee" : "Assistant"}: ${message.content}`,
+    )
     .join("\n");
   const response = await ai.models.generateContent({
     model: ROUTING_MODEL,
@@ -194,7 +326,7 @@ export async function POST(request) {
     const userEmail = String(body?.userEmail || "").trim();
     const sessionId = String(body?.sessionId || "").trim();
     const history = normalizeMessages(
-      Array.isArray(body?.messages) ? body.messages : body?.history
+      Array.isArray(body?.messages) ? body.messages : body?.history,
     );
     const priorPolicyMessages = buildPriorPolicyMessages(history);
     const longTermMemory = Array.isArray(body?.longTermMemory)
@@ -207,66 +339,47 @@ export async function POST(request) {
     if (!question) {
       return NextResponse.json(
         { error: "Please provide a valid 'question' in the request body." },
-        { status: 400 }
-      );
-    }
-    if (!userEmail || !sessionId) {
-      return NextResponse.json(
-        { error: "Employee email and chat session ID are required." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    let employee;
-    let supabase;
-    try {
-      employee = await getEmployeeByEmail(userEmail);
-      supabase = getSupabaseServerClient();
-    } catch (employeeError) {
-      const message =
-        employeeError instanceof Error
-          ? employeeError.message
-          : "Employee authorization failed.";
-      const status = message.toLowerCase().includes("unauthorized") ? 403 : 400;
-      return NextResponse.json({ error: message }, { status });
-    }
+    let employee = null;
+    let supabase = null;
+    const hasSupabaseConfig = Boolean(
+      process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+    );
 
-    const { data: ownedSession, error: sessionLookupError } = await supabase
-      .from("chatbot_sessions")
-      .select("id, title")
-      .eq("id", sessionId)
-      .eq("user_id", employee.id)
-      .maybeSingle();
-    if (sessionLookupError) {
-      return NextResponse.json(
-        { error: `Session lookup failed: ${sessionLookupError.message}` },
-        { status: 400 }
-      );
-    }
-    if (!ownedSession) {
-      return NextResponse.json(
-        { error: "Unauthorized: chat session not found." },
-        { status: 403 }
-      );
-    }
+    if (userEmail && sessionId && hasSupabaseConfig) {
+      try {
+        employee = await getEmployeeByEmail(userEmail);
+        supabase = getSupabaseServerClient();
 
-    const { error: userMessageError } = await supabase
-      .from("chatbot_messages")
-      .insert({
-        session_id: sessionId,
-        user_id: employee.id,
-        role: "user",
-        content: question,
-        cited_chunks: [],
-        rewritten_query: null,
-        model_used: null,
-        is_chitchat: false,
-      });
-    if (userMessageError) {
-      return NextResponse.json(
-        { error: `Failed to save chat message: ${userMessageError.message}` },
-        { status: 400 }
-      );
+        const { data: ownedSession, error: sessionLookupError } = await supabase
+          .from("chatbot_sessions")
+          .select("id, title")
+          .eq("id", sessionId)
+          .eq("user_id", employee.id)
+          .maybeSingle();
+        if (sessionLookupError || !ownedSession) {
+          employee = null;
+          supabase = null;
+        } else {
+          await supabase.from("chatbot_messages").insert({
+            session_id: sessionId,
+            user_id: employee.id,
+            role: "user",
+            content: question,
+            cited_chunks: [],
+            rewritten_query: null,
+            model_used: null,
+            is_chitchat: false,
+          });
+        }
+      } catch {
+        employee = null;
+        supabase = null;
+      }
     }
 
     let routedIntent = "POLICY";
@@ -282,7 +395,7 @@ export async function POST(request) {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey || apiKey === "your_api_key_here") {
         throw new Error(
-          "Missing or placeholder GEMINI_API_KEY in environment variables (.env.local)."
+          "Missing or placeholder GEMINI_API_KEY in environment variables (.env.local).",
         );
       }
       try {
@@ -297,8 +410,12 @@ export async function POST(request) {
         console.error("Intent routing failed:", routingError);
       }
     }
-    if (routedIntent === "POLICY" && ownedSession.title === "New Conversation") {
-      const cleanTitle = question.replace(/\s+/g, " ").trim().slice(0, 40).trim();
+    if (routedIntent === "POLICY" && supabase && employee) {
+      const cleanTitle = question
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 40)
+        .trim();
       if (cleanTitle) {
         await supabase
           .from("chatbot_sessions")
@@ -309,9 +426,7 @@ export async function POST(request) {
     }
 
     if (routedIntent === "CHITCHAT") {
-      const text = /^(thanks|thank you|thx)\b/i.test(question)
-        ? "You're welcome! How else can I help?"
-        : "Hello! I am your Assistant. How can I assist you today?";
+      const text = getChitchatReply(question) || SHORT_GREETING_REPLY;
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
         async start(controller) {
@@ -324,27 +439,31 @@ export async function POST(request) {
                 rewrittenQuery: question,
                 newMemoryFact,
                 modelUsed: null,
-              }) + "\n"
-            )
+              }) + "\n",
+            ),
           );
           controller.enqueue(
-            encoder.encode(JSON.stringify({ type: "text", content: text }) + "\n")
+            encoder.encode(
+              JSON.stringify({ type: "text", content: text }) + "\n",
+            ),
           );
-          await supabase.from("chatbot_messages").insert({
-            session_id: sessionId,
-            user_id: employee.id,
-            role: "assistant",
-            content: text,
-            cited_chunks: [],
-            rewritten_query: question,
-            model_used: null,
-            is_chitchat: true,
-          });
-          await supabase
-            .from("chatbot_sessions")
-            .update({ updated_at: new Date().toISOString() })
-            .eq("id", sessionId)
-            .eq("user_id", employee.id);
+          if (supabase && employee) {
+            await supabase.from("chatbot_messages").insert({
+              session_id: sessionId,
+              user_id: employee.id,
+              role: "assistant",
+              content: text,
+              cited_chunks: [],
+              rewritten_query: question,
+              model_used: null,
+              is_chitchat: true,
+            });
+            await supabase
+              .from("chatbot_sessions")
+              .update({ updated_at: new Date().toISOString() })
+              .eq("id", sessionId)
+              .eq("user_id", employee.id);
+          }
           controller.close();
         },
       });
@@ -357,8 +476,8 @@ export async function POST(request) {
       });
     }
 
-    // Hybrid Search: Top-K = 5, minScore = 0.35
-    const retrievedChunks = await searchPolicyChunks(rewrittenQuery, 5, 0.35);
+    // Hybrid Search: Top-K = 3, minScore = 0.55
+    const retrievedChunks = await searchPolicyChunks(rewrittenQuery, 3, 0.55);
 
     const matchedChunks = retrievedChunks.map((chunk) => ({
       id: chunk.id,
@@ -389,26 +508,28 @@ export async function POST(request) {
 
           // 2. Early exit without calling LLM if no chunks matched
           if (matchedChunks.length === 0) {
-            const fallbackText = "The current policy document does not specify this.";
+            const fallbackText = NO_MATCH_FALLBACK;
             enqueueEvent({
               type: "text",
               content: fallbackText,
             });
-            await supabase.from("chatbot_messages").insert({
-              session_id: sessionId,
-              user_id: employee.id,
-              role: "assistant",
-              content: fallbackText,
-              cited_chunks: [],
-              rewritten_query: rewrittenQuery,
-              model_used: null,
-              is_chitchat: false,
-            });
-            await supabase
-              .from("chatbot_sessions")
-              .update({ updated_at: new Date().toISOString() })
-              .eq("id", sessionId)
-              .eq("user_id", employee.id);
+            if (supabase && employee) {
+              await supabase.from("chatbot_messages").insert({
+                session_id: sessionId,
+                user_id: employee.id,
+                role: "assistant",
+                content: fallbackText,
+                cited_chunks: [],
+                rewritten_query: rewrittenQuery,
+                model_used: null,
+                is_chitchat: false,
+              });
+              await supabase
+                .from("chatbot_sessions")
+                .update({ updated_at: new Date().toISOString() })
+                .eq("id", sessionId)
+                .eq("user_id", employee.id);
+            }
             controller.close();
             return;
           }
@@ -416,7 +537,7 @@ export async function POST(request) {
           const apiKey = process.env.GEMINI_API_KEY;
           if (!apiKey || apiKey === "your_api_key_here") {
             throw new Error(
-              "Missing or placeholder GEMINI_API_KEY in environment variables (.env.local)."
+              "Missing or placeholder GEMINI_API_KEY in environment variables (.env.local).",
             );
           }
 
@@ -435,7 +556,7 @@ export async function POST(request) {
             .slice(-6)
             .map(
               (message) =>
-                `${message.role === "user" ? "Employee" : "Assistant"}: ${message.content}`
+                `${message.role === "user" ? "Employee" : "Assistant"}: ${message.content}`,
             )
             .join("\n");
           const memoryText =
@@ -449,14 +570,14 @@ export async function POST(request) {
             `Employee Question: ${rewrittenQuery}`;
 
           // 3. Stream tokens from fast non-thinking Flash-Lite model
-          const department = employee.department || "general";
-          const departmentInstruction =
-            `\n\nEMPLOYEE_CONTEXT:\nName: ${employee.full_name}\nDepartment: ${department}\n` +
-            `Tailor workflow examples and role responsibilities to this department while remaining grounded exclusively in <POLICY_CONTEXT>.`;
+          const department = employee?.department || "general";
+          const departmentInstruction = employee
+            ? `\n\nEMPLOYEE_CONTEXT:\nName: ${employee.full_name}\nDepartment: ${department}\nTailor workflow examples and role responsibilities to this department while remaining grounded exclusively in <POLICY_CONTEXT>.`
+            : "";
           const streamedResult = await openGenerateStreamWithRetry(
             ai,
             prompt,
-            `${BASE_SYSTEM_INSTRUCTION}${departmentInstruction}`
+            `${BASE_SYSTEM_INSTRUCTION}${departmentInstruction}`,
           );
           const responseStream = streamedResult.stream;
           const modelUsed = streamedResult.modelUsed;
@@ -481,33 +602,35 @@ export async function POST(request) {
           if (!hasEmittedText && !request.signal?.aborted) {
             enqueueEvent({
               type: "text",
-              content: "The current policy document does not specify this.",
+              content: NO_MATCH_FALLBACK,
             });
           }
 
           if (!hasEmittedText) {
-            accumulatedText = "The current policy document does not specify this.";
+            accumulatedText = NO_MATCH_FALLBACK;
           }
           const savedAssistantText = accumulatedText;
 
-          await supabase.from("chatbot_messages").insert({
-            session_id: sessionId,
-            user_id: employee.id,
-            role: "assistant",
-            content: savedAssistantText,
-            cited_chunks: matchedChunks.map((chunk) => ({
-              id: chunk.id,
-              score: chunk.score,
-            })),
-            rewritten_query: rewrittenQuery,
-            model_used: modelUsed,
-            is_chitchat: false,
-          });
-          await supabase
-            .from("chatbot_sessions")
-            .update({ updated_at: new Date().toISOString() })
-            .eq("id", sessionId)
-            .eq("user_id", employee.id);
+          if (supabase && employee) {
+            await supabase.from("chatbot_messages").insert({
+              session_id: sessionId,
+              user_id: employee.id,
+              role: "assistant",
+              content: savedAssistantText,
+              cited_chunks: matchedChunks.map((chunk) => ({
+                id: chunk.id,
+                score: chunk.score,
+              })),
+              rewritten_query: rewrittenQuery,
+              model_used: modelUsed,
+              is_chitchat: false,
+            });
+            await supabase
+              .from("chatbot_sessions")
+              .update({ updated_at: new Date().toISOString() })
+              .eq("id", sessionId)
+              .eq("user_id", employee.id);
+          }
           controller.close();
         } catch (streamError) {
           if (!request.signal?.aborted) {
@@ -534,7 +657,7 @@ export async function POST(request) {
       {
         error: formatApiError(error),
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

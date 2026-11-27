@@ -4,12 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const CHAT_SESSIONS_KEY = "archemist_hr_chat_sessions_v1";
 const ACTIVE_SESSION_KEY = "archemist_hr_active_session_id";
+const USER_MEMORY_KEY = "archemist_hr_user_memory";
 
 const SAMPLE_QUESTIONS = [
-  "What are the official shift timings and late threshold rules?",
-  "How does the multi-tier leave approval workflow work?",
+  "What are the official shift timings?",
+  "How does the leave approval workflow work?",
   "What happens when I close my browser tab?",
-  "How do I onboard or offboard an employee?",
+  "How do I onboard an employee?",
 ];
 
 function makeId(prefix = "chat") {
@@ -23,7 +24,7 @@ function createWelcomeMessage() {
   return {
     id: makeId("welcome"),
     role: "assistant",
-    content: "Hello! I am your Assistant. How can I assist you today?",
+    content: "Hello again! How can I help?",
     timestamp: Date.now(),
     chunks: undefined,
     rewrittenQuery: null,
@@ -44,11 +45,21 @@ function createSession(title = "New Conversation") {
   };
 }
 
+function hasUserMessages(session) {
+  return Boolean(
+    session?.messages?.some((message) => message.role === "user")
+  );
+}
+
 function stripSectionCitations(text) {
   if (!text) return "";
   return text
     .replace(/\s*\[Section\s*\d*[^\]]*\]/gi, "")
-    .replace(/\s*\(Section\s*\d+[^)]*\)/gi, "");
+    .replace(/\s*\(Section\s*\d+[^)]*\)/gi, "")
+    .replace(
+      /The current policy document does not specify this\.?/gi,
+      "I don't have that specific detail in our current HR & Operations guidelines. Feel free to ask me about something else !"
+    );
 }
 
 function renderInlineFormatting(line) {
@@ -57,7 +68,7 @@ function renderInlineFormatting(line) {
   return parts.map((part, idx) => {
     if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
       return (
-        <strong key={idx} className="font-semibold text-stone-900">
+        <strong key={idx} className="font-semibold text-[#0F1B3D]">
           {part.slice(2, -2)}
         </strong>
       );
@@ -66,7 +77,7 @@ function renderInlineFormatting(line) {
       return (
         <code
           key={idx}
-          className="px-1.5 py-0.5 mx-0.5 rounded bg-stone-100 text-[#3D428B] font-mono text-[12px] border border-stone-200/80"
+          className="px-1.5 py-0.5 mx-0.5 rounded bg-slate-100 text-[#3D428B] font-mono text-[12px] border border-slate-200/80"
         >
           {part.slice(1, -1)}
         </code>
@@ -87,8 +98,8 @@ function renderMessageText(text) {
         if (/^[-*•]\s+/.test(trimmed)) {
           const content = trimmed.replace(/^[-*•]\s+/, "");
           return (
-            <div key={i} className="flex items-start gap-2 pl-1">
-              <span className="text-[#D07A1E] font-bold select-none">&bull;</span>
+            <div key={i} className="flex items-start gap-2 pl-0.5">
+              <span className="text-[#636899] font-bold select-none">&bull;</span>
               <span>{renderInlineFormatting(content)}</span>
             </div>
           );
@@ -113,37 +124,28 @@ function formatRelativeTime(timestamp) {
   if (diff < hour) return `${Math.floor(diff / minute)}m ago`;
   if (diff < day) return `${Math.floor(diff / hour)}h ago`;
   if (diff < 2 * day) return "Yesterday";
-  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
-  return new Date(timestamp).toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-function getHistoryGroup(timestamp) {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const startYesterday = startToday - 24 * 60 * 60 * 1000;
-  const startSevenDays = startToday - 7 * 24 * 60 * 60 * 1000;
-  if (timestamp >= startToday) return "Today";
-  if (timestamp >= startYesterday) return "Yesterday";
-  if (timestamp >= startSevenDays) return "Previous 7 Days";
-  return "Older";
+  return new Date(timestamp).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function normalizeSavedMessage(message) {
   return {
     id: message.id || makeId("message"),
     role: message.role === "assistant" ? "assistant" : "user",
-    content: typeof message.content === "string"
-      ? message.content
-      : typeof message.text === "string"
+    content:
+      typeof message.content === "string"
+        ? message.content
+        : typeof message.text === "string"
         ? message.text
         : "",
     timestamp: Number(message.timestamp) || Date.now(),
     chunks: Array.isArray(message.chunks)
       ? message.chunks
       : Array.isArray(message.matchedChunks)
-        ? message.matchedChunks
-        : undefined,
+      ? message.matchedChunks
+      : undefined,
     rewrittenQuery: message.rewrittenQuery || null,
     modelUsed: message.modelUsed || null,
     isWelcome: Boolean(message.isWelcome),
@@ -151,43 +153,72 @@ function normalizeSavedMessage(message) {
   };
 }
 
-function SidebarIcon() {
+function AgentAvatar({ className = "w-11 h-11" }) {
   return (
-    <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
-      <path strokeLinecap="round" d="M4 5h16M4 12h16M4 19h16" />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14M10 10v6m4-6v6" />
-    </svg>
+    <div
+      className={`${className} relative rounded-full overflow-hidden bg-gradient-to-b from-slate-200 to-slate-300 flex items-center justify-center shrink-0 select-none`}
+    >
+      <svg
+        viewBox="0 0 64 64"
+        className="w-full h-full"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#E2E8F0" />
+            <stop offset="100%" stopColor="#CBD5E1" />
+          </linearGradient>
+        </defs>
+        <rect width="64" height="64" fill="url(#bgGrad)" />
+        {/* Suit shoulders */}
+        <path
+          d="M10 64 C12 47, 52 47, 54 64 Z"
+          fill="#1E293B"
+        />
+        {/* White shirt & tie */}
+        <polygon points="27,48 37,48 32,60" fill="#FFFFFF" />
+        <polygon points="31,51 33,51 33.5,62 30.5,62" fill="#3B82F6" />
+        {/* Neck */}
+        <rect x="28" y="38" width="8" height="11" rx="3" fill="#E0AC8B" />
+        {/* Head */}
+        <ellipse cx="32" cy="28" rx="11" ry="13" fill="#ECC0A1" />
+        {/* Hair */}
+        <path
+          d="M21 25 C20 14, 44 13, 43 25 C41 19, 36 17, 29 18 C24 18, 22 21, 21 25 Z"
+          fill="#3B281E"
+        />
+        {/* Beard/Smile */}
+        <path
+          d="M23 31 C24 40, 40 40, 41 31 C40 36, 36 39, 32 39 C28 39, 24 36, 23 31 Z"
+          fill="#4A3427"
+          opacity="0.7"
+        />
+        <path
+          d="M28.5 34 Q32 36.8 35.5 34"
+          fill="none"
+          stroke="#FFFFFF"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+        {/* Eyes */}
+        <circle cx="28" cy="27" r="1.4" fill="#1E293B" />
+        <circle cx="36" cy="27" r="1.4" fill="#1E293B" />
+      </svg>
+    </div>
   );
 }
 
 export default function HomePage() {
-  const [indexStatus, setIndexStatus] = useState(null);
-  const [isSyncingPolicy, setIsSyncingPolicy] = useState(true);
+  const [isPopoverOpen, setIsPopoverOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState("chat"); // "chat" | "history"
+
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [isHydrated, setIsHydrated] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [ragOpen, setRagOpen] = useState(false);
-  const [latestChunks, setLatestChunks] = useState([]);
-  const [latestQuestion, setLatestQuestion] = useState("");
-  const [rewrittenQuery, setRewrittenQuery] = useState("");
-  const [latestIntent, setLatestIntent] = useState("");
   const [questionInput, setQuestionInput] = useState("");
   const [longTermMemory, setLongTermMemory] = useState([]);
-  const [isMemoryOpen, setIsMemoryOpen] = useState(false);
-  const [memoryToast, setMemoryToast] = useState("");
   const [userEmail, setUserEmail] = useState("");
-  const [emailInput, setEmailInput] = useState("");
-  const [employeeProfile, setEmployeeProfile] = useState(null);
-  const [employeeError, setEmployeeError] = useState("");
 
   const chatEndRef = useRef(null);
   const abortControllerRef = useRef(null);
@@ -195,7 +226,10 @@ export default function HomePage() {
   const questionInputRef = useRef(null);
 
   const activeSession = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId) || sessions[0] || null,
+    () =>
+      sessions.find((session) => session.id === activeSessionId) ||
+      sessions[0] ||
+      null,
     [sessions, activeSessionId]
   );
   const messages = activeSession?.messages || [];
@@ -205,46 +239,34 @@ export default function HomePage() {
       window.localStorage.getItem("archemist_chatbot_user_email") || "";
     if (cachedEmail) {
       setUserEmail(cachedEmail);
-      setEmailInput(cachedEmail);
     }
 
     try {
-      const saved = JSON.parse(window.localStorage.getItem(CHAT_SESSIONS_KEY) || "[]");
-      const savedActiveId = window.localStorage.getItem(ACTIVE_SESSION_KEY);
+      const saved = JSON.parse(
+        window.localStorage.getItem(CHAT_SESSIONS_KEY) || "[]"
+      );
       const normalized = Array.isArray(saved)
         ? saved
             .filter((session) => session && typeof session.id === "string")
             .map((session) => ({
               id: session.id,
-              title: typeof session.title === "string" && session.title.trim()
-                ? session.title
-                : "New Conversation",
+              title:
+                typeof session.title === "string" && session.title.trim()
+                  ? session.title
+                  : "New Conversation",
               createdAt: Number(session.createdAt) || Date.now(),
               updatedAt: Number(session.updatedAt) || Date.now(),
               messages: Array.isArray(session.messages)
                 ? session.messages.map(normalizeSavedMessage)
                 : [createWelcomeMessage()],
             }))
+            .filter(hasUserMessages)
         : [];
 
-      if (normalized.length > 0) {
-        const active =
-          normalized.find((session) => session.id === savedActiveId) ||
-          [...normalized].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-        setSessions(normalized);
-        setActiveSessionId(active.id);
-
-        const lastAssistant = [...active.messages].reverse().find(
-          (message) => message.role === "assistant"
-        );
-        setLatestChunks(lastAssistant?.chunks || []);
-        setRewrittenQuery(lastAssistant?.rewrittenQuery || "");
-        setLatestIntent(lastAssistant?.isChitchat ? "CHITCHAT" : "POLICY");
-      } else {
-        const defaultSession = createSession();
-        setSessions([defaultSession]);
-        setActiveSessionId(defaultSession.id);
-      }
+      const defaultSession = createSession();
+      setSessions([defaultSession, ...normalized]);
+      setActiveSessionId(defaultSession.id);
+      window.localStorage.setItem(ACTIVE_SESSION_KEY, defaultSession.id);
     } catch {
       const defaultSession = createSession();
       setSessions([defaultSession]);
@@ -253,24 +275,29 @@ export default function HomePage() {
 
     try {
       const savedMemory = JSON.parse(
-        window.localStorage.getItem("archemist_hr_user_memory") || "[]"
+        window.localStorage.getItem(USER_MEMORY_KEY) || "[]"
       );
       if (Array.isArray(savedMemory)) {
-        setLongTermMemory(savedMemory.filter((fact) => typeof fact === "string"));
+        setLongTermMemory(
+          savedMemory.filter((fact) => typeof fact === "string")
+        );
       }
     } catch {
       setLongTermMemory([]);
     }
+
     setIsHydrated(true);
 
-    if (cachedEmail) {
-      verifyEmployee(cachedEmail);
-    }
+    // Warm up backend vector store cache silently
+    fetch("/api/ingest", { method: "GET" }).catch(() => {});
   }, []);
 
   useEffect(() => {
     if (!isHydrated) return;
-    window.localStorage.setItem("archemist_hr_user_memory", JSON.stringify(longTermMemory));
+    window.localStorage.setItem(
+      USER_MEMORY_KEY,
+      JSON.stringify(longTermMemory)
+    );
   }, [longTermMemory, isHydrated]);
 
   useEffect(() => {
@@ -282,177 +309,10 @@ export default function HomePage() {
   }, [sessions, activeSessionId, isHydrated, isStreaming]);
 
   useEffect(() => {
-    let active = true;
-    async function loadBackendPolicy() {
-      try {
-        setIsSyncingPolicy(true);
-        const res = await fetch("/api/ingest", { method: "GET" });
-        const data = await res.json();
-        if (active && res.ok) {
-          setIndexStatus({
-            status: data.status || "ready",
-            totalPages: data.totalPages || 7,
-            totalChunks: data.chunkCount ?? data.totalChunks ?? 0,
-          });
-        }
-      } catch (err) {
-        console.error("Failed to check backend policy:", err);
-      } finally {
-        if (active) setIsSyncingPolicy(false);
-      }
+    if (activeTab === "chat" && isPopoverOpen) {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-    loadBackendPolicy();
-    return () => active = false;
-  }, []);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, isStreaming]);
-
-  async function verifyEmployee(rawEmail) {
-    const normalizedEmail = rawEmail.trim().toLowerCase();
-    if (!normalizedEmail) return;
-
-    setEmployeeError("");
-    try {
-      const response = await fetch(
-        `/api/history?email=${encodeURIComponent(normalizedEmail)}`
-      );
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Employee not authorized.");
-
-      setUserEmail(normalizedEmail);
-      setEmployeeProfile(data.employee);
-      setEmailInput(normalizedEmail);
-      window.localStorage.setItem(
-        "archemist_chatbot_user_email",
-        normalizedEmail
-      );
-
-      const normalizedSessions = (data.sessions || []).map((session) => ({
-        id: session.id,
-        title: session.title || "New Conversation",
-        createdAt: session.created_at
-          ? new Date(session.created_at).getTime()
-          : Date.now(),
-        updatedAt: session.updated_at
-          ? new Date(session.updated_at).getTime()
-          : Date.now(),
-        messages: [createWelcomeMessage()],
-      }));
-      if (normalizedSessions.length > 0) {
-        setSessions(normalizedSessions);
-        const savedActiveId = window.localStorage.getItem(ACTIVE_SESSION_KEY);
-        const active =
-          normalizedSessions.find((session) => session.id === savedActiveId) ||
-          normalizedSessions[0];
-        setActiveSessionId(active.id);
-        await loadSession(active.id, normalizedEmail);
-      } else {
-        await createServerSession(normalizedEmail);
-      }
-    } catch (error) {
-      setEmployeeProfile(null);
-      setEmployeeError(
-        error instanceof Error ? error.message : "Employee not authorized."
-      );
-    }
-  }
-
-  async function loadSession(sessionId, email = userEmail) {
-    if (!email || !sessionId) return;
-    try {
-      const response = await fetch(
-        `/api/history/session/${encodeURIComponent(sessionId)}?email=${encodeURIComponent(email)}`
-      );
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not load chat.");
-
-      const hydratedMessages = (data.messages || []).map((message) => ({
-        id: message.id,
-        role: message.role === "assistant" ? "assistant" : "user",
-        content: message.content || "",
-        timestamp: message.created_at
-          ? new Date(message.created_at).getTime()
-          : Date.now(),
-        chunks: Array.isArray(message.cited_chunks)
-          ? message.cited_chunks
-          : undefined,
-        rewrittenQuery: message.rewritten_query || null,
-        modelUsed: message.model_used || null,
-        isWelcome: false,
-        isChitchat: Boolean(message.is_chitchat),
-      }));
-
-      setSessions((previous) =>
-        previous.map((session) =>
-          session.id === sessionId
-            ? {
-                ...session,
-                title: data.session.title || session.title,
-                createdAt: data.session.created_at
-                  ? new Date(data.session.created_at).getTime()
-                  : session.createdAt,
-                updatedAt: data.session.updated_at
-                  ? new Date(data.session.updated_at).getTime()
-                  : session.updatedAt,
-                messages:
-                  hydratedMessages.length > 0
-                    ? hydratedMessages
-                    : [createWelcomeMessage()],
-              }
-            : session
-        )
-      );
-
-      const lastAssistant = [...hydratedMessages]
-        .reverse()
-        .find((message) => message.role === "assistant");
-      setLatestChunks(lastAssistant?.chunks || []);
-      setRewrittenQuery(lastAssistant?.rewrittenQuery || "");
-      setLatestIntent(lastAssistant?.isChitchat ? "CHITCHAT" : "POLICY");
-    } catch (error) {
-      setEmployeeError(
-        error instanceof Error ? error.message : "Could not load chat."
-      );
-    }
-  }
-
-  async function createServerSession(email = userEmail) {
-    if (!email) return;
-    try {
-      const response = await fetch("/api/history/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not create chat.");
-
-      const session = {
-        id: data.session.id,
-        title: data.session.title || "New Conversation",
-        createdAt: data.session.created_at
-          ? new Date(data.session.created_at).getTime()
-          : Date.now(),
-        updatedAt: data.session.updated_at
-          ? new Date(data.session.updated_at).getTime()
-          : Date.now(),
-        messages: [createWelcomeMessage()],
-      };
-      setSessions((previous) => [session, ...previous]);
-      setActiveSessionId(session.id);
-      window.localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
-      setLatestChunks([]);
-      setLatestQuestion("");
-      setRewrittenQuery("");
-      setLatestIntent("");
-    } catch (error) {
-      setEmployeeError(
-        error instanceof Error ? error.message : "Could not create chat."
-      );
-    }
-  }
+  }, [messages.length, isStreaming, activeTab, isPopoverOpen]);
 
   function updateActiveSession(updater) {
     setSessions((previous) =>
@@ -469,23 +329,46 @@ export default function HomePage() {
   }
 
   function handleNewChat() {
-    if (!userEmail) {
-      setEmployeeError("Enter and verify your Archemist email first.");
-      return;
+    if (activeReaderRef.current) {
+      activeReaderRef.current.cancel().catch(() => {});
     }
-    if (activeReaderRef.current) activeReaderRef.current.cancel().catch(() => {});
-    if (abortControllerRef.current) abortControllerRef.current.abort();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     activeReaderRef.current = null;
     abortControllerRef.current = null;
     setIsStreaming(false);
-    createServerSession(userEmail);
+
+    const newSession = createSession();
+    setSessions((previous) => [
+      newSession,
+      ...previous.filter(hasUserMessages).map((session) => ({
+        ...session,
+        messages: session.messages.map((message) =>
+          message.isStreaming ? { ...message, isStreaming: false } : message
+        ),
+      })),
+    ]);
+    setActiveSessionId(newSession.id);
+    window.localStorage.setItem(ACTIVE_SESSION_KEY, newSession.id);
     setQuestionInput("");
+    setActiveTab("chat");
+  }
+
+  function handleOpenChatbot() {
+    handleNewChat();
+    setIsPopoverOpen(true);
+    setTimeout(() => questionInputRef.current?.focus(), 50);
   }
 
   function switchSession(sessionId) {
     if (isStreaming) {
-      if (activeReaderRef.current) activeReaderRef.current.cancel().catch(() => {});
-      if (abortControllerRef.current) abortControllerRef.current.abort();
+      if (activeReaderRef.current) {
+        activeReaderRef.current.cancel().catch(() => {});
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
       activeReaderRef.current = null;
       abortControllerRef.current = null;
       setIsStreaming(false);
@@ -495,64 +378,55 @@ export default function HomePage() {
     if (!session) return;
     setActiveSessionId(sessionId);
     window.localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
-    if (userEmail) loadSession(sessionId, userEmail);
-    const lastAssistant = [...session.messages].reverse().find(
-      (message) => message.role === "assistant"
-    );
-    setLatestChunks(lastAssistant?.chunks || []);
-    setLatestQuestion("");
-    setRewrittenQuery(lastAssistant?.rewrittenQuery || "");
-    setLatestIntent(lastAssistant?.isChitchat ? "CHITCHAT" : "POLICY");
     setQuestionInput("");
+    setActiveTab("chat");
   }
 
   function deleteSession(sessionId) {
-    if (!userEmail) return;
-    fetch(
-      `/api/history/session/${encodeURIComponent(sessionId)}?email=${encodeURIComponent(userEmail)}`,
-      { method: "DELETE" }
-    ).catch(() => {});
+    if (sessionId === activeSessionId && isStreaming) {
+      if (activeReaderRef.current) {
+        activeReaderRef.current.cancel().catch(() => {});
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      activeReaderRef.current = null;
+      abortControllerRef.current = null;
+      setIsStreaming(false);
+    }
 
     setSessions((previous) => {
       const remaining = previous.filter((session) => session.id !== sessionId);
-      if (sessionId !== activeSessionId) return remaining;
+      if (remaining.length === 0) {
+        const fresh = createSession();
+        setActiveSessionId(fresh.id);
+        window.localStorage.setItem(ACTIVE_SESSION_KEY, fresh.id);
+        return [fresh];
+      }
 
-      if (remaining.length > 0) {
+      if (sessionId === activeSessionId) {
         const next = [...remaining].sort((a, b) => b.updatedAt - a.updatedAt)[0];
         setActiveSessionId(next.id);
-        const lastAssistant = [...next.messages].reverse().find(
-          (message) => message.role === "assistant"
-        );
-        setLatestChunks(lastAssistant?.chunks || []);
-        setRewrittenQuery(lastAssistant?.rewrittenQuery || "");
-        setLatestIntent(lastAssistant?.isChitchat ? "CHITCHAT" : "POLICY");
-      } else {
-        const next = createSession();
-        setActiveSessionId(next.id);
-        setLatestChunks([]);
-        setLatestQuestion("");
-        setRewrittenQuery("");
-        setLatestIntent("");
-        return [next];
+        window.localStorage.setItem(ACTIVE_SESSION_KEY, next.id);
       }
+
       return remaining;
     });
   }
 
   function clearAllHistory() {
-    if (!window.confirm("Clear all chat history?")) return;
-    if (activeReaderRef.current) activeReaderRef.current.cancel().catch(() => {});
-    if (abortControllerRef.current) abortControllerRef.current.abort();
+    if (activeReaderRef.current) {
+      activeReaderRef.current.cancel().catch(() => {});
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     activeReaderRef.current = null;
     abortControllerRef.current = null;
     setIsStreaming(false);
     const newSession = createSession();
     setSessions([newSession]);
     setActiveSessionId(newSession.id);
-    setLatestChunks([]);
-    setLatestQuestion("");
-    setRewrittenQuery("");
-    setLatestIntent("");
   }
 
   async function handlePauseSearch() {
@@ -573,9 +447,7 @@ export default function HomePage() {
       if (last?.role === "assistant") {
         updatedMessages[updatedMessages.length - 1] = {
           ...last,
-          content: last.content
-            ? `${last.content}\n\n[Generation paused — feel free to ask a different question.]`
-            : "Response paused. Feel free to ask a different HR policy question.",
+          content: "paused",
           timestamp: Date.now(),
           isStreaming: false,
         };
@@ -583,10 +455,6 @@ export default function HomePage() {
       return { messages: updatedMessages };
     });
     setTimeout(() => questionInputRef.current?.focus(), 50);
-  }
-
-  function removeMemoryFact(factToRemove) {
-    setLongTermMemory((previous) => previous.filter((fact) => fact !== factToRemove));
   }
 
   async function submitQuestion(rawQuestion) {
@@ -599,7 +467,9 @@ export default function HomePage() {
       } catch {}
       activeReaderRef.current = null;
     }
-    if (abortControllerRef.current) abortControllerRef.current.abort();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -627,8 +497,7 @@ export default function HomePage() {
     }));
     setQuestionInput("");
     setIsStreaming(true);
-    setLatestQuestion(trimmed);
-    setLatestChunks([]);
+    setActiveTab("chat");
 
     const processNdjsonLine = (line) => {
       const cleanLine = line.trim();
@@ -642,29 +511,29 @@ export default function HomePage() {
 
       if (event.type === "sources") {
         const chunks = Array.isArray(event.chunks) ? event.chunks : [];
-        const rewritten = event.rewrittenQuery && event.rewrittenQuery !== trimmed
-          ? event.rewrittenQuery
-          : null;
-        setLatestChunks(chunks);
-        setLatestIntent(event.intent || "");
-        setRewrittenQuery(rewritten || "");
+        const rewritten =
+          event.rewrittenQuery && event.rewrittenQuery !== trimmed
+            ? event.rewrittenQuery
+            : null;
 
-        if (typeof event.newMemoryFact === "string" && event.newMemoryFact.trim()) {
+        if (
+          typeof event.newMemoryFact === "string" &&
+          event.newMemoryFact.trim()
+        ) {
           const fact = event.newMemoryFact.trim();
           setLongTermMemory((previous) =>
             previous.some((item) => item.toLowerCase() === fact.toLowerCase())
               ? previous
               : [...previous, fact]
           );
-          setMemoryToast("Memory updated");
-          window.setTimeout(() => setMemoryToast(""), 2200);
         }
 
         setSessions((previous) =>
           previous.map((session) => {
             if (session.id !== activeSessionId) return session;
             const shouldTitle =
-              event.intent === "POLICY" && session.title === "New Conversation";
+              event.intent === "POLICY" &&
+              session.title === "New Conversation";
             return {
               ...session,
               title: shouldTitle ? cleanTitle(trimmed) : session.title,
@@ -712,7 +581,9 @@ export default function HomePage() {
                     message.id === assistantMessageId
                       ? {
                           ...message,
-                          content: event.content || "Something went wrong while searching the policy.",
+                          content:
+                            event.content ||
+                            "Something went wrong while searching the policy.",
                           isStreaming: false,
                           isError: true,
                         }
@@ -737,10 +608,7 @@ export default function HomePage() {
           matchedChunks: message.chunks ?? null,
           intent: message.isChitchat ? "CHITCHAT" : "POLICY",
         }));
-      const fullMessages = [
-        ...history,
-        { role: "user", content: trimmed },
-      ];
+      const fullMessages = [...history, { role: "user", content: trimmed }];
 
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -755,6 +623,7 @@ export default function HomePage() {
         }),
         signal: controller.signal,
       });
+
       if (!res.ok) {
         let errorMsg = "Failed to get answer from HR assistant.";
         try {
@@ -763,7 +632,9 @@ export default function HomePage() {
         } catch {}
         throw new Error(errorMsg);
       }
-      if (!res.body) throw new Error("ReadableStream is not available in this response.");
+      if (!res.body) {
+        throw new Error("ReadableStream is not available in this response.");
+      }
 
       const reader = res.body.getReader();
       activeReaderRef.current = reader;
@@ -791,8 +662,9 @@ export default function HomePage() {
                     ? {
                         ...message,
                         isStreaming: false,
-                        content: message.content ||
-                          "The current policy document does not specify this.",
+                        content:
+                          message.content ||
+                          "I don't have that specific detail in our current HR & Operations guidelines. How else can I help?",
                       }
                     : message
                 ),
@@ -814,7 +686,9 @@ export default function HomePage() {
                         ...message,
                         isError: true,
                         isStreaming: false,
-                        content: err.message || "Something went wrong while searching the policy.",
+                        content:
+                          err.message ||
+                          "Something went wrong while searching the policy.",
                       }
                     : message
                 ),
@@ -831,380 +705,389 @@ export default function HomePage() {
     }
   }
 
-  const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
-  const groupedSessions = sortedSessions.reduce((groups, session) => {
-    const group = getHistoryGroup(session.updatedAt);
-    if (!groups[group]) groups[group] = [];
-    groups[group].push(session);
-    return groups;
-  }, {});
-
-  function inspectTurn(messageIndex) {
-    const message = messages[messageIndex];
-    if (!message) return;
-    const previousUser = [...messages.slice(0, messageIndex)]
-      .reverse()
-      .find((item) => item.role === "user");
-    setLatestQuestion(previousUser?.content || "");
-    setLatestChunks(Array.isArray(message.chunks) ? message.chunks : []);
-    setRewrittenQuery(message.rewrittenQuery || "");
-    setLatestIntent(message.isChitchat ? "CHITCHAT" : "POLICY");
-    setRagOpen(true);
-  }
+  const sortedSessions = useMemo(
+    () => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt),
+    [sessions]
+  );
 
   return (
-    <div className="h-dvh w-screen overflow-hidden bg-[#F8FAFC] text-slate-800 flex flex-col">
-      <header className="relative shrink-0 bg-[#3D428B] text-white shadow-sm z-30">
-        <div className="px-4 sm:px-5 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setSidebarOpen((open) => !open)}
-              className="h-9 w-9 shrink-0 rounded-lg border border-white/25 bg-white/10 flex items-center justify-center hover:bg-white/20"
-              aria-label="Toggle chat history"
-            >
-              <SidebarIcon />
-            </button>
-            <div className="h-8 w-8 shrink-0 rounded-lg bg-white/15 flex items-center justify-center font-bold text-sm">HR</div>
-            <div className="min-w-0">
-              <h1 className="text-base sm:text-lg font-semibold tracking-tight leading-tight truncate">
-                HR Policy RAG Chatbot
-              </h1>
-              <p className="hidden sm:block text-[11px] text-indigo-100/90">
-                Hybrid Section-Aware Retrieval &bull; Real-Time Streaming
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                verifyEmployee(emailInput);
-              }}
-              className="hidden md:flex items-center gap-1.5"
-            >
-              {employeeProfile ? (
-                <div className="flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-1.5">
-                  <span className="max-w-32 truncate text-xs font-semibold">
-                    {employeeProfile.full_name}
-                  </span>
-                  {employeeProfile.department && (
-                    <span className="rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-medium capitalize">
-                      {employeeProfile.department}
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <input
-                    type="email"
-                    value={emailInput}
-                    onChange={(event) => setEmailInput(event.target.value)}
-                    placeholder="email@archemist.com"
-                    className="w-44 rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-xs text-white placeholder:text-indigo-100/70 outline-none"
-                  />
-                  <button
-                    type="submit"
-                    className="rounded-full border border-white/25 bg-white px-3 py-1.5 text-xs font-semibold text-[#3D428B]"
-                  >
-                    Verify
-                  </button>
-                </>
-              )}
-            </form>
-            <button
-              type="button"
-              onClick={() => setIsMemoryOpen((open) => !open)}
-              className="rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
-            >
-              Memory ({longTermMemory.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setRagOpen((open) => !open)}
-              className="rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
-            >
-              Inspect Sources
-            </button>
-          </div>
+    <div className="h-dvh w-screen overflow-hidden bg-[#F3F4F9] text-[#0B2149] flex flex-col relative select-none sm:select-auto">
+      {/* Top Website Navbar */}
+      <header className="shrink-0 h-16 bg-white/95 border-b border-slate-200/70 px-6 sm:px-10 flex items-center justify-between">
+        <div className="text-lg font-bold tracking-tight text-[#122652]">
+          Your site
         </div>
-
-        {isMemoryOpen && (
-          <div className="absolute right-4 top-14 z-50 w-[320px] rounded-xl border border-stone-200 bg-white p-3 text-stone-800 shadow-xl">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-[#3D428B]">Saved Memory</h3>
-              {longTermMemory.length > 0 && (
-                <button type="button" onClick={() => setLongTermMemory([])} className="text-xs font-medium text-red-600">
-                  Clear all
-                </button>
-              )}
-            </div>
-            {longTermMemory.length === 0 ? (
-              <p className="text-xs text-stone-500">No saved user facts yet.</p>
-            ) : (
-              <div className="max-h-64 space-y-2 overflow-y-auto">
-                {longTermMemory.map((fact) => (
-                  <div key={fact} className="flex items-start gap-2 rounded-lg bg-[#F7F6F2] px-2.5 py-2">
-                    <span className="flex-1 text-xs leading-relaxed">{fact}</span>
-                    <button type="button" onClick={() => removeMemoryFact(fact)} className="text-xs font-bold text-stone-400 hover:text-red-600" aria-label={`Remove ${fact}`}>x</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-        {memoryToast && (
-          <div className="absolute right-4 top-14 z-40 rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-lg">
-            {memoryToast}
-          </div>
-        )}
+        <nav className="flex items-center gap-6 sm:gap-9 text-sm font-medium text-[#3B558E]">
+          <a href="#home" onClick={(e) => e.preventDefault()} className="hover:text-[#122652] transition-colors">
+            Home
+          </a>
+          <a href="#about" onClick={(e) => e.preventDefault()} className="hover:text-[#122652] transition-colors">
+            About
+          </a>
+          <a href="#blog" onClick={(e) => e.preventDefault()} className="hover:text-[#122652] transition-colors">
+            Blog
+          </a>
+          <a href="#contact" onClick={(e) => e.preventDefault()} className="hover:text-[#122652] transition-colors">
+            Contact
+          </a>
+        </nav>
       </header>
 
-      <main className="flex-1 min-h-0 flex overflow-hidden">
-        {sidebarOpen && (
-          <div
-            className="fixed inset-0 z-40 bg-slate-900/30 lg:hidden"
-            onClick={() => setSidebarOpen(false)}
-            aria-hidden="true"
-          />
-        )}
-        <aside
-          className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} fixed lg:relative z-50 lg:z-20 h-[calc(100dvh-64px)] lg:h-full w-[260px] shrink-0 border-r border-[#E2E8F0] bg-[#F8FAFC] transition-transform duration-200 flex flex-col`}
+      {/* Main Website Hero Content */}
+      <main className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+        <h1 className="text-2xl sm:text-[28px] font-bold text-[#0A1F44] tracking-tight">
+          Chatbot
+        </h1>
+        <p className="mt-3 text-sm sm:text-[15px] text-[#4C6299] max-w-md">
+          Add an interactive chatbot popover anchored to one side of your website
+        </p>
+      </main>
+
+      {/* Floating Circular Avatar Launcher (Bottom-Right Corner when Popover is Closed) */}
+      {!isPopoverOpen && (
+        <button
+          type="button"
+          onClick={handleOpenChatbot}
+          aria-label="Open chatbot"
+          className="fixed bottom-5 right-5 z-50 w-16 h-16 rounded-full ring-4 ring-white shadow-[0_10px_30px_rgba(15,23,42,0.24)] hover:scale-105 active:scale-95 transition-transform cursor-pointer overflow-hidden"
         >
-          <div className="p-3 border-b border-[#E2E8F0]">
-            <button
-              type="button"
-              onClick={handleNewChat}
-              className="w-full rounded-lg bg-[#3D428B] px-3 py-2.5 text-sm font-semibold text-white hover:bg-[#313673] flex items-center justify-center gap-2"
-            >
-              <span className="text-lg leading-none">+</span>
-              New Chat
-            </button>
+          <AgentAvatar className="w-full h-full" />
+        </button>
+      )}
+
+      {/* Anchored Chatbot Popover Widget */}
+      {isPopoverOpen && (
+        <section
+          aria-label="Personal Assistant Chatbot"
+          className="fixed bottom-4 right-4 sm:bottom-5 sm:right-6 z-50 w-[360px] sm:w-[390px] h-[575px] max-h-[calc(100dvh-32px)] max-w-[calc(100vw-24px)] rounded-[24px] bg-white shadow-[0_16px_48px_rgba(15,23,42,0.2)] border border-slate-200/80 flex flex-col overflow-hidden"
+        >
+          {/* Slate-Indigo Top Header */}
+          <div className="relative shrink-0 bg-[#64699A] text-white px-4 pt-3.5 pb-6 flex items-center justify-between">
+            <div className="flex items-center gap-3 min-w-0">
+              <AgentAvatar className="w-11 h-11 ring-2 ring-white/25" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-[15px] leading-tight truncate">
+                    Rohit
+                  </span>
+                  <span className="inline-flex items-center justify-center rounded bg-white px-1.5 py-0.5 text-[10px] font-extrabold text-[#555A8B] leading-none">
+                    AI
+                  </span>
+                </div>
+                <p className="text-xs text-indigo-100/90 mt-0.5 truncate">
+                  Personal Assistant
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {/* Close Popover Button */}
+              <button
+                type="button"
+                onClick={() => setIsPopoverOpen(false)}
+                aria-label="Close chatbot"
+                className="w-7 h-7 rounded-lg bg-white text-[#1E293B] hover:bg-slate-100 flex items-center justify-center shadow-xs cursor-pointer"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto px-2 py-3">
-            {["Today", "Yesterday", "Previous 7 Days", "Older"].map((group) =>
-              (groupedSessions[group] || []).length > 0 ? (
-                <div key={group} className="mb-4">
-                  <p className="px-2 mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">{group}</p>
-                  <div className="space-y-1">
-                    {groupedSessions[group].map((session) => (
-                      <button
-                        key={session.id}
-                        type="button"
-                        onClick={() => switchSession(session.id)}
-                        className={`group w-full rounded-lg px-2.5 py-2 text-left flex items-center gap-2 ${
-                          session.id === activeSessionId
-                            ? "bg-[#EEF2FF] text-[#3D428B]"
-                            : "text-slate-700 hover:bg-slate-100"
+          {/* Curved White Inner Body */}
+          <div className="relative -mt-3.5 flex-1 min-h-0 rounded-t-[20px] bg-white flex flex-col overflow-hidden">
+            {/* TAB 1: CHAT VIEW */}
+            {activeTab === "chat" ? (
+              <>
+                <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-4 pb-2 space-y-3.5">
+                  {messages.map((msg) => {
+                    const isUser = msg.role === "user";
+                    if (!isUser && msg.isStreaming && !msg.content) {
+                      return null;
+                    }
+                    return (
+                      <div
+                        key={msg.id}
+                        className={`flex ${
+                          isUser ? "justify-end" : "justify-start"
                         }`}
                       >
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">{session.title}</p>
-                          <p className={`mt-0.5 text-[10px] ${session.id === activeSessionId ? "text-indigo-500" : "text-slate-400"}`}>
-                            {formatRelativeTime(session.updatedAt)}
-                          </p>
-                        </div>
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            deleteSession(session.id);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.stopPropagation();
-                              deleteSession(session.id);
-                            }
-                          }}
-                          className="hidden group-hover:block shrink-0 p-1 text-slate-400 hover:text-red-600"
-                          aria-label={`Delete ${session.title}`}
-                        >
-                          <TrashIcon />
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null
-            )}
-          </div>
-
-          <div className="border-t border-[#E2E8F0] p-3">
-            <button
-              type="button"
-              onClick={clearAllHistory}
-              className="w-full rounded-lg px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-red-600"
-            >
-              Clear All History
-            </button>
-          </div>
-        </aside>
-
-        <section className="flex-1 min-w-0 h-full flex flex-col bg-white">
-          <div className="shrink-0 px-5 py-3 border-b border-stone-200 flex items-center justify-between bg-[#3D428B]/5">
-            <div className="min-w-0">
-              <h2 className="truncate text-sm sm:text-base font-semibold text-[#3D428B]">
-                {activeSession?.title || "HR Policy Assistant"}
-              </h2>
-              <p className="text-xs text-stone-500">Grounded policy answers &bull; Real-time stream</p>
-            </div>
-            <span className="hidden sm:inline text-xs font-medium text-stone-500 bg-white px-3 py-1 rounded-full border border-stone-200">
-              Top-K = 5 &bull; Min Score = 0.35
-            </span>
-          </div>
-
-          <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4 bg-[#F7F6F2]/40">
-            {messages.map((msg, messageIndex) => {
-              const isUser = msg.role === "user";
-              if (!isUser && msg.isStreaming && !msg.content) return null;
-              return (
-                <div key={msg.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-xs ${
-                    isUser
-                      ? "bg-[#3D428B] text-white rounded-br-sm"
-                      : msg.isError
-                        ? "bg-red-50 text-red-800 border border-red-200 rounded-bl-sm"
-                        : "bg-white text-stone-800 border border-stone-200/90 rounded-bl-sm"
-                  }`}>
-                    <div className="flex items-center justify-between gap-4 mb-1">
-                      <span className={`text-[11px] font-semibold uppercase tracking-wider ${
-                        isUser ? "text-indigo-200" : msg.isError ? "text-red-600" : "text-[#3D428B]"
-                      }`}>
-                        {isUser ? "You" : "HR Policy Bot"}
-                      </span>
-                      {!isUser && Array.isArray(msg.chunks) && (
-                        <button
-                          type="button"
-                          onClick={() => inspectTurn(messageIndex)}
-                          className="text-[11px] font-medium text-[#D07A1E] hover:underline cursor-pointer"
-                          title="Inspect chunks used for this response"
-                        >
-                          {msg.chunks.length} chunk{msg.chunks.length === 1 ? "" : "s"} cited
-                        </button>
-                      )}
-                    </div>
-                    {isUser
-                      ? <div className="whitespace-pre-wrap">{msg.content}</div>
-                      : renderMessageText(msg.content)}
-                  </div>
-                </div>
-              );
-            })}
-
-            {isStreaming && (
-              <div className="flex justify-start">
-                <div className="bg-white border border-stone-200 rounded-2xl rounded-bl-sm px-4 py-2.5 shadow-xs flex items-center gap-3 text-sm text-stone-600">
-                  <span className="h-4 w-4 border-2 border-[#3D428B] border-t-transparent rounded-full animate-spin" />
-                  <span className="font-medium text-[#3D428B]">Searching HR policy...</span>
-                  <button type="button" onClick={handlePauseSearch} className="ml-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-[#D07A1E] border border-[#D07A1E]/30">
-                    Pause
-                  </button>
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          <div className="shrink-0 p-3.5 bg-white border-t border-stone-200 space-y-2.5">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-stone-400 mr-1">Quick Ask:</span>
-              {SAMPLE_QUESTIONS.map((sample) => (
-                <button
-                  key={sample}
-                  type="button"
-                  onClick={() => submitQuestion(sample)}
-                  className="text-xs px-3 py-1 rounded-full bg-[#F7F6F2] hover:bg-indigo-50 text-stone-700 hover:text-[#3D428B] border border-stone-200 hover:border-[#3D428B]/30"
-                >
-                  {sample}
-                </button>
-              ))}
-            </div>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                submitQuestion(questionInput);
-              }}
-              className="flex items-center gap-2.5"
-            >
-              <input
-                ref={questionInputRef}
-                type="text"
-                value={questionInput}
-                onChange={(event) => setQuestionInput(event.target.value)}
-                placeholder="Ask an HR policy question..."
-                className="flex-1 min-w-0 rounded-xl border border-stone-300 bg-[#F7F6F2]/50 px-4 py-2.5 text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#3D428B] focus:bg-white"
-              />
-              {isStreaming && (
-                <button type="button" onClick={handlePauseSearch} className="px-3 py-2.5 rounded-xl bg-[#D07A1E] text-white text-sm font-medium">
-                  Pause
-                </button>
-              )}
-              <button
-                type="submit"
-                disabled={!questionInput.trim()}
-                className="px-5 py-2.5 rounded-xl bg-[#3D428B] hover:bg-[#313673] text-white font-medium text-sm disabled:opacity-50"
-              >
-                Ask Policy
-              </button>
-            </form>
-          </div>
-        </section>
-
-        {ragOpen && (
-          <>
-            <div
-              className="fixed inset-0 z-40 bg-slate-900/20 lg:hidden"
-              onClick={() => setRagOpen(false)}
-              aria-hidden="true"
-            />
-            <aside className="fixed right-0 top-[64px] bottom-0 z-50 w-[360px] max-w-[92vw] border-l border-[#E2E8F0] bg-white lg:relative lg:top-auto lg:w-[360px] lg:z-20 shrink-0 p-4 flex flex-col">
-              <div className="shrink-0 flex items-center justify-between mb-2">
-                <h2 className="text-sm font-semibold text-[#3D428B]">Retrieved PDF Chunks</h2>
-                <button type="button" onClick={() => setRagOpen(false)} className="text-lg leading-none text-slate-400 hover:text-slate-700" aria-label="Close RAG Inspector">×</button>
-              </div>
-              {latestQuestion && (
-                <div className="shrink-0 mb-2 space-y-0.5">
-                  <p className="text-xs text-stone-500 truncate">Query: <span className="font-medium text-stone-700">&ldquo;{latestQuestion}&rdquo;</span></p>
-                  {rewrittenQuery && <p className="text-xs text-[#3D428B] truncate">Rewritten: &ldquo;{rewrittenQuery}&rdquo;</p>}
-                </div>
-              )}
-              <div className="flex-1 min-h-0 overflow-y-auto space-y-2.5 pr-1">
-                {latestChunks.length === 0 ? (
-                  <div className="h-full min-h-32 flex items-center justify-center text-center rounded-xl bg-[#F8FAFC] border border-dashed border-[#E2E8F0] px-4">
-                    <p className="text-xs text-stone-500">
-                      {latestIntent === "CHITCHAT"
-                        ? "Conversational Mode — no policy retrieval performed."
-                        : "No saved policy chunks for this turn."}
-                    </p>
-                  </div>
-                ) : latestChunks.map((chunk, index) => {
-                  const similarityPercent = chunk.matchPercent !== undefined
-                    ? Number(chunk.matchPercent).toFixed(1)
-                    : chunk.score !== undefined
-                      ? (Number(chunk.score) * 100).toFixed(1)
-                      : null;
-                  return (
-                    <div key={chunk.id || index} className="rounded-xl border border-stone-200 bg-[#F8FAFC] p-3">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-xs font-semibold text-[#3D428B]">#{index + 1} {chunk.id}</span>
-                        {similarityPercent && (
-                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-amber-100 text-[#D07A1E]">
-                            {similarityPercent}% match
-                          </span>
+                        {isUser ? (
+                          <div className="max-w-[82%] rounded-2xl bg-[#F3F2FA] text-[#1C233B] px-3.5 py-2 text-sm leading-relaxed">
+                            <div className="whitespace-pre-wrap">
+                              {msg.content}
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            className={`max-w-[92%] text-sm leading-relaxed ${
+                              msg.isError
+                                ? "rounded-xl bg-red-50 text-red-700 px-3 py-2 border border-red-200"
+                                : "text-[#142149]"
+                            }`}
+                          >
+                            {renderMessageText(msg.content)}
+                          </div>
                         )}
                       </div>
-                      {chunk.section && <p className="text-[11px] font-semibold text-[#3D428B]/80 mb-1 truncate">Section: {chunk.section}</p>}
-                      <p className="text-xs text-stone-700 leading-relaxed whitespace-pre-wrap">{chunk.text}</p>
+                    );
+                  })}
+
+                  {/* Quick-Ask Suggestions when conversation only has the welcome message */}
+                  {messages.length <= 1 && !isStreaming && (
+                    <div className="pt-2 flex flex-wrap gap-1.5">
+                      {SAMPLE_QUESTIONS.map((sample) => (
+                        <button
+                          key={sample}
+                          type="button"
+                          onClick={() => submitQuestion(sample)}
+                          className="text-left text-[11px] px-2.5 py-1.5 rounded-xl bg-[#F3F4F9] hover:bg-[#E7E9F5] text-[#2B3D70] transition-colors cursor-pointer"
+                        >
+                          {sample}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Streaming indicator with Pause option */}
+                  {isStreaming && (
+                    <div className="flex items-center gap-2.5 text-xs text-[#555A8B] py-1">
+                      <span className="h-3.5 w-3.5 border-2 border-[#64699A] border-t-transparent rounded-full animate-spin" />
+                      <span>Thinking...</span>
+                      <button
+                        type="button"
+                        onClick={handlePauseSearch}
+                        className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-[#1E2B58] font-medium cursor-pointer"
+                      >
+                        Pause
+                      </button>
+                    </div>
+                  )}
+
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Pill Input Bar */}
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    submitQuestion(questionInput);
+                  }}
+                  className="shrink-0 mx-3 mb-3 px-3.5 py-1.5 rounded-full bg-[#E3E6F0] flex items-center gap-2"
+                >
+                  <input
+                    ref={questionInputRef}
+                    type="text"
+                    value={questionInput}
+                    onChange={(event) => setQuestionInput(event.target.value)}
+                    placeholder="Type here"
+                    className="flex-1 min-w-0 bg-transparent text-sm text-[#142149] placeholder:text-[#7883A5] focus:outline-none py-1"
+                  />
+
+                  {isStreaming ? (
+                    <button
+                      type="button"
+                      onClick={handlePauseSearch}
+                      title="Pause response"
+                      className="w-8 h-8 rounded-full bg-[#D07A1E] hover:bg-[#b86917] text-white flex items-center justify-center shrink-0 cursor-pointer"
+                    >
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
+                        <path d="M5.5 3.5A1.5 1.5 0 017 5v10a1.5 1.5 0 01-3 0V5a1.5 1.5 0 011.5-1.5zm9 0A1.5 1.5 0 0116 5v10a1.5 1.5 0 01-3 0V5a1.5 1.5 0 011.5-1.5z" />
+                      </svg>
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={!questionInput.trim()}
+                      aria-label="Send message"
+                      className="w-8 h-8 rounded-full bg-[#0066CC] hover:bg-[#0055B3] disabled:opacity-50 text-white flex items-center justify-center shrink-0 transition-colors cursor-pointer"
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.2"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 12h14M13 5l7 7-7 7"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                </form>
+              </>
+            ) : (
+              /* TAB 2: HISTORY VIEW */
+              <div className="flex-1 min-h-0 overflow-y-auto px-3.5 pt-3.5 pb-3 space-y-2.5">
+                <div className="flex items-center justify-between px-1 mb-1">
+                  <span className="text-xs font-semibold text-[#555A8B]">
+                    Conversations ({sortedSessions.length})
+                  </span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleNewChat}
+                      className="text-xs font-semibold text-[#0066CC] hover:underline cursor-pointer"
+                    >
+                      + New Chat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearAllHistory}
+                      className="text-xs font-semibold text-red-600 hover:underline cursor-pointer"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                </div>
+
+                {sortedSessions.map((session) => {
+                  const isCurrent = session.id === activeSessionId;
+                  const lastMsg =
+                    session.messages[session.messages.length - 1] ||
+                    createWelcomeMessage();
+                  const previewText = stripSectionCitations(
+                    lastMsg.content || "Hello again! How can I help?"
+                  );
+
+                  return (
+                    <div
+                      key={session.id}
+                      onClick={() => switchSession(session.id)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          switchSession(session.id);
+                        }
+                      }}
+                      className="group rounded-2xl bg-[#ECEDF5] hover:bg-[#E2E4F0] p-3.5 flex items-start gap-3 transition-colors cursor-pointer"
+                    >
+                      <div className="w-9 h-9 rounded-full bg-[#878CB4] text-white flex items-center justify-center shrink-0 mt-0.5">
+                        <svg
+                          className="w-4 h-4"
+                          fill="currentColor"
+                          viewBox="0 0 20 20"
+                        >
+                          <path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v7a2 2 0 01-2 2H6l-4 4V5z" />
+                        </svg>
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-bold text-[#142149] truncate">
+                            Rohit:
+                          </p>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              deleteSession(session.id);
+                            }}
+                            title="Delete this chat"
+                            aria-label="Delete conversation"
+                            className="p-1 rounded-md text-[#6D7797] hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer shrink-0"
+                          >
+                            <svg
+                              className="w-3.5 h-3.5"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14M10 10v6m4-6v6"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                        <p className="text-xs text-[#1E2B58] truncate mt-0.5">
+                          {previewText}
+                        </p>
+                        <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium text-[#47537B]">
+                          {isCurrent ? (
+                            <>
+                              <span className="h-2 w-2 rounded-full bg-[#1C2D5E]" />
+                              <span>Current</span>
+                            </>
+                          ) : (
+                            <span>{formatRelativeTime(session.updatedAt)}</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
               </div>
-            </aside>
-          </>
-        )}
-      </main>
+            )}
+
+            {/* Bottom Navigation Bar (ONLY 2 Tabs: Chat & History — No Voice) */}
+            <div className="shrink-0 grid grid-cols-2 border-t border-slate-200/80 bg-white">
+              <button
+                type="button"
+                onClick={() => setActiveTab("chat")}
+                className={`py-2.5 flex flex-col items-center justify-center gap-1 text-xs transition-colors cursor-pointer ${
+                  activeTab === "chat"
+                    ? "border-t-2 border-[#16234D] text-[#16234D] font-semibold"
+                    : "text-[#6D7797] hover:text-[#16234D]"
+                }`}
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                >
+                  <path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v7a2 2 0 01-2 2H6l-4 4V5z" />
+                </svg>
+                <span>Chat</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("history")}
+                className={`py-2.5 flex flex-col items-center justify-center gap-1 text-xs transition-colors cursor-pointer ${
+                  activeTab === "history"
+                    ? "border-t-2 border-[#16234D] text-[#16234D] font-semibold"
+                    : "text-[#6D7797] hover:text-[#16234D]"
+                }`}
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-12.25a.75.75 0 00-1.5 0v4.5c0 .414.336.75.75.75h3a.75.75 0 000-1.5h-2.25V5.75z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                <span>History</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

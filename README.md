@@ -19,21 +19,21 @@ The chatbot is intended to make HR information easier to find for topics such as
 
 ## Features
 
-- Full-height, responsive chat interface.
+- Embeddable floating website chatbot popover anchored to the bottom-right corner with a circular avatar launcher.
+- Two-tab popover navigation (`Chat` and `History`, without any `Voice` tab).
+- Clean customer-facing answers without displaying internal chunk IDs, match scores, or section citations in the UI.
 - Preset quick questions for common HR topics.
 - Server-side hybrid retrieval combining semantic similarity and keyword overlap.
-- Top-5 retrieval with a 35% minimum similarity threshold.
+- Top-3 retrieval with a 55% minimum similarity threshold.
 - Section-aware PDF chunking.
-- A RAG Inspector panel that shows matched policy excerpts.
 - NDJSON streaming for retrieved sources and generated answer tokens.
 - Pause/cancel support for active searches.
 - Graceful behavior when no matching chunk or API key is available.
 - Automatic loading of the pre-built vector store on server startup.
 - Intent routing for policy questions and conversational chitchat.
 - Standalone follow-up query rewriting with the configured `GEMINI_ROUTING_MODEL` or `GEMINI_CHAT_MODEL`.
-- Browser-persistent selective user memory with a memory badge and drawer.
-- Individual memory removal, clear-all memory, and New Chat controls.
-- Rewritten-query and conversational-mode information in the RAG Inspector.
+- Browser-persistent selective user memory (`archemist_hr_user_memory`).
+- Individual chat deletion (trash icon on every History card), `Clear All`, and `+ New Chat` controls in the `History` tab.
 
 ## Technology Stack
 
@@ -100,8 +100,8 @@ HR Chatbot/
 7. The server loads and caches the vector store in memory.
 8. A user's question is expanded if it contains fewer than four words.
 9. The question is embedded and compared with stored chunks using cosine similarity.
-10. A keyword-overlap bonus of up to 15% is added to the semantic score.
-11. The system returns up to five chunks scoring at least 35%.
+10. A length-normalized keyword-overlap bonus of up to 15% is added to the semantic score (mildly dampened for chunks exceeding 400 characters).
+11. The system returns up to three chunks scoring at least 55%.
 12. If no chunk qualifies, the application states that the policy does not specify the answer.
 13. If chunks qualify, they are sent to the client and included in the Gemini prompt.
 14. Gemini streams a concise answer strictly grounded in those excerpts.
@@ -217,21 +217,24 @@ Returns NDJSON events:
 
 ## Search and Response Rules
 
-- Retrieval uses `Top-K = 5`.
-- Retrieval requires a minimum hybrid score of `0.35`.
+- Retrieval uses `Top-K = 3`.
+- Retrieval requires a minimum hybrid score of `0.55`.
 - Short queries containing fewer than four words receive HR-policy context expansion.
 - Repeated query embeddings are cached in memory.
-- The model is instructed to answer only from supplied excerpts.
-- Simple chitchat skips vector retrieval.
+- The model is instructed to answer strictly what was asked from supplied excerpts (`temperature: 0.1`) using Adaptive Scope & Zero-Filler Rules (1–2 crisp sentences for narrow facts, concise bullets for broad policies/processes, strict scope boundaries without volunteering adjacent rules or penalties unless asked, zero filler, and contrastive few-shot examples).
+- Simple chitchat and greeting variants (`hi`, `hie`, `hii`, `hello`, `helo`, `hey`, `hiya`, etc.) skip vector retrieval and return a consistent short greeting reply (`"Hello again! How can I help?"`), while policy questions prefixed with a greeting still route to policy retrieval.
 - Follow-up questions are rewritten using recent policy context only when a deterministic context-rewrite guard detects pronouns, follow-up phrases, or very short queries.
 - Prior greetings and responses with zero cited policy chunks are excluded from context-rewrite history.
 - Durable facts are stored only in browser `localStorage` and remain separate from short-term chat messages.
 - New Chat clears the conversation but preserves local memory.
-- Chat sessions persist under `archemist_hr_chat_sessions_v1`, with the active thread remembered under `archemist_hr_active_session_id`.
-- The left sidebar provides session switching, individual deletion, history grouping, and clear-all history.
-- Historical assistant chunks can be reopened in the toggleable RAG Inspector.
-- If policy text is missing, the expected fallback is:
-  `The current policy document does not specify this.`
+- Opening the chatbot via the floating launcher (or reloading the page) always starts a fresh new chat on the `Chat` tab while preserving previous non-empty conversations in `History` (`archemist_hr_chat_sessions_v1`) and keeping saved memory (`archemist_hr_user_memory`).
+- Historical conversation threads can be revisited, managed, and deleted from the `History` tab or header menu.
+- If a specific policy detail is not covered in the manual, the assistant responds naturally with helpful topic suggestions rather than outputting robotic error strings.
+
+## Project Phases & Checkpoints
+
+- **Phase 1 / V1 (Checkpoint — `v1.0-checkpoint`)**: Core Hybrid RAG Engine (`lib/rag-engine.js`), section-aware PDF indexing (`scripts/build-index.js`), NDJSON streaming (`/api/chat`), short-term context rewriting, selective long-term user memory (`archemist_hr_user_memory`), and full-screen inspection dashboard.
+- **Phase 2 / V2 (Current)**: Website-integrated floating chatbot popover UI (`Rohit AI • Personal Assistant`) anchored to the bottom-right corner with circular avatar launcher, streamlined header (close button only), 2-tab navigation (`Chat` & `History`, no `Voice`), per-chat deletion controls, hidden internal chunk metadata, and natural small-talk & fallback responses.
 
 ## Deployment Notes
 

@@ -44,9 +44,37 @@ This file tracks completed work, current work, and future plans for the HR Polic
 - Missing policy information produces an explicit fallback rather than an inferred answer.
 - Query embeddings are cached by normalized question text during each server process lifetime.
 
-## Present
+## Present — Phase 2 (V2: Embeddable Website Popover UI & Conversational UX)
 
-### 2026-11-23
+> **Milestone Note**: Everything completed prior to 2026-11-25 represents **Phase 1 / V1 (Checkpoint)** (`git tag: v1.0-checkpoint`). Phase 2 introduces the embeddable website popover widget UI and natural customer-facing conversational flow.
+
+### 2026-11-26 (Phase 2)
+
+#### Completed
+- Updated `app/page.js` so clicking the floating chatbot launcher (or opening/reloading the page) always starts a fresh new chat on the `Chat` tab instead of continuing the previous thread.
+- Preserved previous conversations with user messages in the `History` tab (`archemist_hr_chat_sessions_v1`) and retained browser-persistent user memory (`archemist_hr_user_memory`), while preventing untouched empty sessions from accumulating in `History`.
+- Expanded deterministic greeting detection in `app/api/chat/route.js` so casual greeting variants (`hi`, `hie`, `hii`, `hello`, `helo`, `hlo`, `hey`, `heyy`, `hiya`, `hy`, `namaste`, `good morning`, etc., with optional punctuation/emojis or addressees like `rohit`/`there`) all bypass policy retrieval and return the same concise reply (`"Hello again! How can I help?"`), while policy questions starting with a greeting still proceed to RAG retrieval.
+- Updated `BASE_SYSTEM_INSTRUCTION` in `app/api/chat/route.js` with Adaptive Scope & Zero-Filler Rules plus two contrastive few-shot examples (narrow fact vs. broad policy) and set answer generation `temperature` to `0.1`.
+- Tightened RAG retrieval in `lib/rag-engine.js` and `app/api/chat/route.js` to `topK = 3` and `minScore = 0.55`, and added mild chunk-length normalization (`sqrt(400 / len)` floored at `0.6` for chunks > 400 chars) to `computeKeywordOverlapBonus`.
+- Updated the popover header in `app/page.js` to display `Personal Assistant` (replacing `Customer Service`) and removed the three-dots (`⋮`) options menu button from the header.
+
+### 2026-11-25 (Phase 2)
+
+#### Completed
+- Marked the pre-popover full-screen RAG dashboard & memory implementation as **V1 (Checkpoint)** (`v1.0-checkpoint`) and started **Phase 2** for the website-integrated popover experience.
+- Redesigned `app/page.js` into an embeddable website shell with an interactive floating chatbot popover anchored to the bottom-right corner and a circular avatar launcher button.
+- Configured the popover bottom navigation bar with two tabs only (`Chat` and `History`), omitting the `Voice` tab.
+- Removed the RAG Inspector and cited-chunk badges from the user-facing UI so users see clean policy answers without raw chunk metadata.
+- Added always-visible per-chat delete (trash icon) buttons on every conversation card in the `History` tab, a `Clear All` action, and a `Delete Current Chat` option in the popover header menu.
+- Expanded conversational chitchat detection (`"how r u?"`, `"how are you"`, `"who are you"`, `"what can you do"`, greetings, thanks, farewells) and replaced the robotic `"The current policy document does not specify this."` string with natural, helpful conversational responses.
+- Updated pause behavior so pausing an active response replaces the assistant turn output with `"paused"` only.
+- Made Supabase session persistence optional in `app/api/chat/route.js` when local Supabase environment variables are absent, preserving full local and browser-persistent chat functionality.
+
+---
+
+## Phase 1 / V1 Checkpoint Archive (Pre-2026-11-25)
+
+### 2026-11-23 (V1 Checkpoint)
 
 #### Completed
 - Added short-term conversational memory using the most recent chat turns.
