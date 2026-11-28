@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { searchPolicyChunks } from "@/lib/rag-engine";
+import { classifyIntent } from "@/lib/intent-classifier";
 import {
   getEmployeeByEmail,
   getSupabaseServerClient,
@@ -10,6 +11,9 @@ const NO_MATCH_FALLBACK =
   "I don't have that specific detail in our current HR & Operations guidelines. Feel free to ask me about something else !";
 
 const SHORT_GREETING_REPLY = "Hello again! How can I help?";
+
+const DEFAULT_CHITCHAT_REPLY =
+  "Hello! I'm your HR Policy Assistant. Ask me anything about company leave rules, office timings, work-from-home policies, or reimbursements.";
 
 const GREETING_TOKEN_PATTERN =
   "(?:hi+(?:e+|y[ao]*)?|hy+[ea]*|he+y+(?:a+|o+)?|ha+y+a*|h[aeu]l+o+w*|hl+o+|ello+|ho+l+a+|namast+e+y?|namaskar|yo+|howdy+|greetings?|good\\s+(?:morning|afternoon|evening|day)|morning|afternoon|evening|gm|ga|ge)";
@@ -140,10 +144,6 @@ function getChitchatReply(question) {
   return null;
 }
 
-function isGreetingOrChitchat(question) {
-  return Boolean(getChitchatReply(question));
-}
-
 function normalizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
   return messages
@@ -183,7 +183,7 @@ function buildPriorPolicyMessages(messages) {
       nextAssistant.matchedChunks.length > 0;
     const isChitchat =
       nextAssistant?.intent === "CHITCHAT" ||
-      isGreetingOrChitchat(message.content);
+      classifyIntent(message.content).intent === "CHITCHAT";
 
     if (!hasCitedPolicyChunks || isChitchat) continue;
 
@@ -319,6 +319,66 @@ async function openGenerateStreamWithRetry(ai, prompt, systemInstruction) {
   throw lastError;
 }
 
+function createChitchatStreamResponse({
+  text,
+  question,
+  classifiedIntent,
+  newMemoryFact = null,
+  supabase,
+  employee,
+  sessionId,
+}) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(
+        encoder.encode(
+          JSON.stringify({
+            type: "sources",
+            chunks: [],
+            intent: "CHITCHAT",
+            classifiedIntent,
+            rewrittenQuery: question,
+            newMemoryFact,
+            modelUsed: null,
+          }) + "\n",
+        ),
+      );
+      controller.enqueue(
+        encoder.encode(
+          JSON.stringify({ type: "text", content: text }) + "\n",
+        ),
+      );
+      if (supabase && employee) {
+        await supabase.from("chatbot_messages").insert({
+          session_id: sessionId,
+          user_id: employee.id,
+          role: "assistant",
+          content: text,
+          cited_chunks: [],
+          rewritten_query: question,
+          model_used: null,
+          is_chitchat: true,
+        });
+        await supabase
+          .from("chatbot_sessions")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", sessionId)
+          .eq("user_id", employee.id);
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
+}
+
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -364,17 +424,6 @@ export async function POST(request) {
         if (sessionLookupError || !ownedSession) {
           employee = null;
           supabase = null;
-        } else {
-          await supabase.from("chatbot_messages").insert({
-            session_id: sessionId,
-            user_id: employee.id,
-            role: "user",
-            content: question,
-            cited_chunks: [],
-            rewritten_query: null,
-            model_used: null,
-            is_chitchat: false,
-          });
         }
       } catch {
         employee = null;
@@ -382,16 +431,43 @@ export async function POST(request) {
       }
     }
 
+    const { intent, confidence } = classifyIntent(question);
+    console.log(
+      `[IntentRouter] intent=${intent} confidence=${confidence.toFixed(4)}`,
+    );
+
+    if (supabase && employee) {
+      await supabase.from("chatbot_messages").insert({
+        session_id: sessionId,
+        user_id: employee.id,
+        role: "user",
+        content: question,
+        cited_chunks: [],
+        rewritten_query: null,
+        model_used: null,
+        is_chitchat: intent === "CHITCHAT",
+      });
+    }
+
+    // Fast-Path for CHITCHAT: skip embeddings and vector search completely.
+    if (intent === "CHITCHAT") {
+      const text = getChitchatReply(question) || DEFAULT_CHITCHAT_REPLY;
+      return createChitchatStreamResponse({
+        text,
+        question,
+        classifiedIntent: intent,
+        newMemoryFact: null,
+        supabase,
+        employee,
+        sessionId,
+      });
+    }
+
     let routedIntent = "POLICY";
     let rewrittenQuery = question;
     let newMemoryFact = null;
 
-    if (isGreetingOrChitchat(question)) {
-      routedIntent = "CHITCHAT";
-    } else if (!needsContextRewrite(question, priorPolicyMessages)) {
-      routedIntent = "POLICY";
-      rewrittenQuery = question;
-    } else {
+    if (needsContextRewrite(question, priorPolicyMessages)) {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey || apiKey === "your_api_key_here") {
         throw new Error(
@@ -410,6 +486,20 @@ export async function POST(request) {
         console.error("Intent routing failed:", routingError);
       }
     }
+
+    if (routedIntent === "CHITCHAT") {
+      const text = getChitchatReply(question) || DEFAULT_CHITCHAT_REPLY;
+      return createChitchatStreamResponse({
+        text,
+        question,
+        classifiedIntent: intent,
+        newMemoryFact,
+        supabase,
+        employee,
+        sessionId,
+      });
+    }
+
     if (routedIntent === "POLICY" && supabase && employee) {
       const cleanTitle = question
         .replace(/\s+/g, " ")
@@ -423,57 +513,6 @@ export async function POST(request) {
           .eq("id", sessionId)
           .eq("user_id", employee.id);
       }
-    }
-
-    if (routedIntent === "CHITCHAT") {
-      const text = getChitchatReply(question) || SHORT_GREETING_REPLY;
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream({
-        async start(controller) {
-          controller.enqueue(
-            encoder.encode(
-              JSON.stringify({
-                type: "sources",
-                chunks: [],
-                intent: "CHITCHAT",
-                rewrittenQuery: question,
-                newMemoryFact,
-                modelUsed: null,
-              }) + "\n",
-            ),
-          );
-          controller.enqueue(
-            encoder.encode(
-              JSON.stringify({ type: "text", content: text }) + "\n",
-            ),
-          );
-          if (supabase && employee) {
-            await supabase.from("chatbot_messages").insert({
-              session_id: sessionId,
-              user_id: employee.id,
-              role: "assistant",
-              content: text,
-              cited_chunks: [],
-              rewritten_query: question,
-              model_used: null,
-              is_chitchat: true,
-            });
-            await supabase
-              .from("chatbot_sessions")
-              .update({ updated_at: new Date().toISOString() })
-              .eq("id", sessionId)
-              .eq("user_id", employee.id);
-          }
-          controller.close();
-        },
-      });
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "application/x-ndjson; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-        },
-      });
     }
 
     // Hybrid Search: Top-K = 3, minScore = 0.55
@@ -501,6 +540,7 @@ export async function POST(request) {
             type: "sources",
             chunks: matchedChunks,
             intent: "POLICY",
+            classifiedIntent: intent,
             rewrittenQuery,
             newMemoryFact,
             modelUsed: null,

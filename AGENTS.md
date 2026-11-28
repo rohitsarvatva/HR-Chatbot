@@ -11,7 +11,9 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 # Project Agent Guidance
 
 - Preserve the local JSON vector index, `gemini-embedding-001` embeddings, and NDJSON streaming protocol.
-- Keep greeting and pleasantry handling separate from policy retrieval.
+- Keep `natural` strictly server-side (`serverExternalPackages` in `next.config.mjs`) and keep `lib/intent-features.js` shared between training (`scripts/train-intent.js`) and runtime (`lib/intent-classifier.js`).
+- Keep greeting and pleasantry handling separate from policy retrieval (`CHITCHAT` fast-path with `>= 2.0x` runner-up margin guardrail so mixed greeting + policy queries route safely to `POLICY_RAG`).
+- Re-run `npm run intent:generate` and `npm run intent:train` whenever `data/vector-store.json` is rebuilt from a modified policy PDF.
 - Send recent `messages` and `longTermMemory` with chat requests.
 - Use short-term history to resolve follow-ups; do not expose it as durable memory.
 - Extract only durable role, department, location, shift-preference, or workflow-context facts.
@@ -27,4 +29,4 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 - **Checkpoint 1 (`v1.0-checkpoint`, pre-2026-11-25)**: Core Hybrid RAG Engine, section-aware PDF indexing, NDJSON streaming, short-term context rewriting, selective long-term user memory, and full-screen RAG Inspector dashboard.
 - **Checkpoint 2 (`v2.0-checkpoint`, 2026-11-25 to 2026-11-27 / commit `d0c3e34`)**: Embeddable floating popover UI (`Rohit AI • Personal Assistant`, 2-tab `Chat`/`History`, no `Voice` or options menu), fresh chat on launcher open/reload with preserved non-empty history and user memory, hidden chunk metadata, expanded deterministic greeting/small-talk and natural fallbacks, tightened retrieval (`topK = 3`, `minScore = 0.55`, chunk-length normalization), and Adaptive Scope & Zero-Filler prompting (`temperature: 0.1`).
-- **Part 3 / Phase 3 (Current)**: Everything after Checkpoint 2 (`v2.0-checkpoint`) is Part 3. Log all new work under Phase 3 / Part 3 in `README.md` and `Brag.md`.
+- **Part 3 / Phase 3 (Current)**: Everything after Checkpoint 2 (`v2.0-checkpoint`) is Part 3 — including Porter Stemmer + Jaro-Winkler fuzzy keyword matching (`lib/nlp-matcher.js`), precomputed `chunkStems` caching, and the PDF-driven 4-class serialized Naive Bayes intent pipeline (`lib/intent-features.js`, `lib/intent-classifier.js`, `scripts/generate-intent-data.js`, `scripts/train-intent.js`, `data/intent-dataset.json`, `data/intent-model.json`). Log all new work under Phase 3 / Part 3 in `README.md` and `Brag.md`.

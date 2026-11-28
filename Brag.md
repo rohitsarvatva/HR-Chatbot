@@ -51,6 +51,29 @@ This file tracks completed work, current work, and future plans for the HR Polic
 > - **Checkpoint 2 (Phase 2 / V2)** (`git tag: v2.0-checkpoint`): Everything completed from 2026-11-25 through 2026-11-27 (`d0c3e34`) covering the embeddable website popover UI, fresh-chat-on-open behavior, expanded greeting/chitchat routing, Adaptive Scope & Zero-Filler prompting, and tightened RAG retrieval (`topK = 3`, `minScore = 0.55`).
 > - **Part 3 (Phase 3 / V3)**: Everything implemented after Checkpoint 2 belongs to Part 3.
 
+### 2026-11-28 (Part 3 — PDF-Driven Intent Training Pipeline & Serialized Naive Bayes Model)
+
+#### Completed
+- Added shared unigram + bigram Porter-stemmed feature extractor `lib/intent-features.js` (`normalizeIntentText`, `extractIntentFeatures`) used identically at training time and runtime.
+- Created `scripts/generate-intent-data.js` (`npm run intent:generate`, using `dotenv` `^18.0.10` and `@google/genai` with `gemini-3.1-flash-lite` structured JSON output) to read all 18 chunks from `data/vector-store.json`, generate 3 realistic employee questions per chunk (short/casual, natural workplace, and specific rule/number — 52 unique raw policy questions), and save a balanced 144-sample 4-class dataset (36 samples each across `POLICY_RAG`, `CHITCHAT`, `DB_LOOKUP`, and `OUT_OF_SCOPE`) to `data/intent-dataset.json`.
+- Created `scripts/train-intent.js` (`npm run intent:train`) to train `natural.BayesClassifier` on unigram + bigram stemmed features, serialize the model to `data/intent-model.json`, and print a summary table of per-class sample counts, average features, and top learned vocabulary features.
+- Updated `lib/intent-classifier.js` to restore `data/intent-model.json` once at server startup via `natural.BayesClassifier.restore(...)` (exposing `isIntentModelLoadedFromDisk()`), with safe in-memory fallback and runner-up margin guardrails (`>= 2.0x` for `CHITCHAT`, `>= 1.5x` for `OUT_OF_SCOPE`, and `< 1.05` ambiguous default to `POLICY_RAG`).
+- Integrated `classifyIntent(question)` into `app/api/chat/route.js` right after optional Supabase auth/session validation with `[IntentRouter]` server logging, an extracted `createChitchatStreamResponse` helper + `DEFAULT_CHITCHAT_REPLY` fallback, a `CHITCHAT` fast-path bypassing `gemini-embedding-001` and `searchPolicyChunks` while persisting user and assistant turns to Supabase `chatbot_messages`, `classifiedIntent` metadata in NDJSON `sources` events, and `buildPriorPolicyMessages` updated to use `classifyIntent` for chitchat filtering.
+- Updated project documentation (`README.md`, `Brag.md`, `AGENTS.md`, and `Personal Documentation/`) to reflect the full Part 3 NLP and intent classification pipeline.
+
+#### Issues or Decisions
+- Kept stopwords intact inside `lib/intent-features.js` (unlike `lib/nlp-matcher.js`, which strips stopwords for chunk retrieval) so short conversational utterances (`"who are you"`, `"how are you"`) and personal-data pronouns (`"my attendance"`, `"my leave balance"`) retain discriminative unigram and bigram signals.
+- Enforced a strict `>= 2.0x` runner-up margin on `CHITCHAT` so mixed messages like `"hi, what does the studio policy say about leaves?"` default safely to `POLICY_RAG` instead of short-circuiting.
+- Kept `DB_LOOKUP` and `OUT_OF_SCOPE` passing through to the RAG pipeline for now (`OUT_OF_SCOPE` naturally hits the `0.55` similarity threshold fallback with zero LLM generation cost) until dedicated database lookup handlers and an optional `OUT_OF_SCOPE` fast-path are wired up.
+
+#### In Progress
+- Continuing Part 3 retrieval and NLP enhancements (including future `DB_LOOKUP` database hooks).
+
+#### Next Steps
+- Wire `DB_LOOKUP` intent handling to live employee attendance/leave queries when Supabase auth is active.
+- Add optional `OUT_OF_SCOPE` fast-path reply handling once validated against edge-case policy queries.
+- Add automated test cases verifying intent classification accuracy, margin guardrails, and Porter/Jaro-Winkler retrieval scoring.
+
 ### 2026-11-27 (Part 3 — Starting Point)
 
 #### Completed
@@ -125,7 +148,8 @@ This file tracks completed work, current work, and future plans for the HR Polic
 
 - [ ] Add automated unit and integration tests.
 - [ ] Add a reload or re-ingest action for replacing the policy file through the UI.
-- [ ] Persist chat history in a database or browser storage.
+- [x] Persist chat history in a database or browser storage (browser `localStorage` + optional Supabase `chatbot_sessions` / `chatbot_messages`).
+- [ ] Connect `DB_LOOKUP` intent routing to live employee leave-balance and attendance database queries.
 - [ ] Add source citations that preserve section names without exposing raw chunk formatting.
 - [ ] Add an administrator view for policy index status and index rebuild history.
 - [ ] Add access control for employee-only deployments.

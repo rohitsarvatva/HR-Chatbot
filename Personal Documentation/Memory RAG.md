@@ -84,6 +84,12 @@ Exclude Greetings from chatHistory Sent to the Router
 
 Filter out CHITCHAT messages when building priorPolicyMessages so saying "hi" never tricks the bot into thinking a real conversation has started.
 
+**Part 3 Update (Naive Bayes Intent Router)**
+
+- Step 0 now runs `classifyIntent(question)` (`lib/intent-classifier.js`, restored from `data/intent-model.json`) in < 1 ms before context rewriting or embeddings.
+- Confirmed `CHITCHAT` (`>= 2.0x` margin) exits immediately on a fast-path without calling `gemini-embedding-001` or `routeAndRewrite`.
+- `buildPriorPolicyMessages` also uses `classifyIntent(message.content).intent === "CHITCHAT"` alongside cited-chunk checks to keep casual turns out of policy follow-up history.
+
 
 
 

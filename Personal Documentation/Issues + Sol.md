@@ -69,3 +69,13 @@ Set temperature: 0.1 and added Adaptive Scope rules: Gemini now extracts only th
 question—giving 1–2 lines for simple facts and bullet points only when a full process is asked.
 
 
+
+Prb-5 (Part 3 — NLP & Routing)
+- Plain keyword matching missed grammatical variations ("deducting" vs "deductions") and fast-typing typos ("attandance", "reimbursemnt").
+- Fragile regex-only chitchat detection could not cleanly separate general small-talk, policy questions, personal DB queries, and out-of-scope prompts.
+
+Sol
+- **Porter Stemming + Jaro-Winkler Fuzzy Matching (`lib/nlp-matcher.js`)**: Precomputed `chunkStems` on vector-store load and upgraded hybrid keyword scoring (capped at `+0.15`) to match exact stems or fuzzy similarity `>= 0.90` (for stems `>= 4` chars).
+- **Serialized Naive Bayes Intent Classifier (`lib/intent-classifier.js`)**: Built a PDF-driven 4-class training pipeline (`npm run intent:generate` + `npm run intent:train`) using shared unigram + bigram stemmed features (`lib/intent-features.js`) across `POLICY_RAG`, `CHITCHAT`, `DB_LOOKUP`, and `OUT_OF_SCOPE`, restored from `data/intent-model.json` at startup. Confirmed `CHITCHAT` (`>= 2.0x` margin) fast-paths in < 1 ms without calling embeddings or Gemini.
+
+
